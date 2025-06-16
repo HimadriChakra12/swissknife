@@ -10,8 +10,8 @@
 // #include <direct.h>
 
 
-#define REPO_FOLDER "./knives"
-#define CONFIG_FILE ".pkgconfig"
+#define REPO_FOLDER "C:/farm/wheats/Swissknife/knives"
+#define CONFIG_FILE "C:/farm/wheats/Swissknife/.pkgconfig"
 
 void save_repo_url(const char* url) {
     FILE* f = fopen(CONFIG_FILE, "w");
