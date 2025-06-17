@@ -1,7 +1,7 @@
 # Package Creation Manual
 
-1. Make a Git Repo for packages. If you want your own.
-or, You can use my repo.
+1. Make a Git Repo for packages if you want your own packages listed
+  or, You can use my repo.
 ```
 https://github.com/HimadriChakra12/knives.git
 ```
