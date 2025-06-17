@@ -8,7 +8,7 @@ if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
 
 
 $Port = read-host "Do you want a Portable Edition?"
-choice ($port){
+switch ($Port){
     y{
         $path = read-host "Which Directory You Want Swissknife to be? "
     }
