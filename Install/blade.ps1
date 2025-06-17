@@ -6,10 +6,19 @@ if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
     exit
 }
 
-$path = "C:/farm/wheats/Swissknife"
+
+$Port = read-host "Do you want a Portable Edition?"
+choice ($port){
+    y{
+        $path = read-host "Which Directory You Want Swissknife to be? "
+    }
+    n{
+        $path = "C:/farm/wheats/Swissknife"
+    }
+}
 
 $docs = @(
-    @{url = "https://github.com/HimadriChakra12/swissknife/releases/download/0.0.1/sk.exe" ; outfile = "$env:TEMP/sk.exe"; file = "C:/farm/wheats/swissknife/sk.exe"}
+    @{url = "https://github.com/HimadriChakra12/swissknife/releases/download/0.0.1/sk.exe" ; outfile = "$env:TEMP/sk.exe"; file = "$path/swissknife/sk.exe"}
 )
 
 if (-not (test-path $path)){
