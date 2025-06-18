@@ -10,65 +10,12 @@
 #define CONFIG_FILE "C:/farm/wheats/Swissknife/.pkgconfig"
 #define INSTALLED_FILE "C:/farm/wheats/Swissknife/package.json"
 
-void save_repo(const char* name, const char* url) {
-    FILE* f = fopen(CONFIG_FILE, "a");
-    if (f) {
-        fprintf(f, "%s|%s\n", name, url);
-        fclose(f);
-    }
-}
-
-void list_repos() {
-    FILE* f = fopen(CONFIG_FILE, "r");
-    if (!f) {
-        printf("No repos configured.\n");
-        return;
-    }
-
-    printf("Configured repos:\n");
-    char line[1024];
-    while (fgets(line, sizeof(line), f)) {
-        char name[128], url[900];
-        if (sscanf(line, "%127[^|]|%899[^\n]", name, url) == 2) {
-            printf(" - %s: %s\n", name, url);
-        }
-    }
-
-    fclose(f);
-}
-
 void save_repo_url(const char* url) {
     FILE* f = fopen(CONFIG_FILE, "w");
     if (f) {
         fprintf(f, "%s\n", url);
         fclose(f);
     }
-}
-void sync_all_repos() {
-    FILE* f = fopen(CONFIG_FILE, "r");
-    if (!f) return;
-
-    char line[1024];
-    while (fgets(line, sizeof(line), f)) {
-        char name[64], url[960];
-        if (sscanf(line, "%63[^|]|%959[^\n]", name, url) == 2) {
-            char dest[1024];
-            sprintf(dest, "%s/%s", REPO_FOLDER, name);
-            if (_access(dest, 0) != 0) {
-                printf("Cloning %s...\n", name);
-                char cmd[2048];
-                sprintf(cmd, "git clone %s %s", url, dest);
-                system(cmd);
-            } else {
-                printf("Pulling %s...\n", name);
-                char cmd[2048];
-                sprintf(cmd, "git -C %s pull", dest);
-                system(cmd);
-            }
-        }
-    }
-
-    fclose(f);
 }
 
 void read_repo_url(char* buffer, size_t size) {
