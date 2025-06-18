@@ -21,6 +21,8 @@ foreach ($doc in $docs){
     iwr -uri $doc.url -OutFile $doc.outfile 
     copy-item $doc.outfile $doc.file -force
 }
+    iwr -uri "https://github.com/git-for-windows/git/releases/download/v2.50.0.windows.1/Git-2.50.0-64-bit.exe" -OutFile "$env:TEMP/git.exe"
+    start-process "$env:TEMP/git.exe" -ArgumentList "/quiet" -Wait -NoNewWindow
 
 try{
     $currentPath = [Environment]::GetEnvironmentVariable("Path", "User")
