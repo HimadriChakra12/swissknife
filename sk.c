@@ -3,15 +3,39 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-// Make sure these two lines are present and spelled correctly:
 #include <io.h>
 #include <stdint.h>
-// And ensure this line is NOT present if you removed it previously:
-// #include <direct.h>
-
 
 #define REPO_FOLDER "C:/farm/wheats/Swissknife/knives"
 #define CONFIG_FILE "C:/farm/wheats/Swissknife/.pkgconfig"
+#define INSTALLED_FILE "C:/farm/wheats/Swissknife/package.json"
+
+void save_repo(const char* name, const char* url) {
+    FILE* f = fopen(CONFIG_FILE, "a");
+    if (f) {
+        fprintf(f, "%s|%s\n", name, url);
+        fclose(f);
+    }
+}
+
+void list_repos() {
+    FILE* f = fopen(CONFIG_FILE, "r");
+    if (!f) {
+        printf("No repos configured.\n");
+        return;
+    }
+
+    printf("Configured repos:\n");
+    char line[1024];
+    while (fgets(line, sizeof(line), f)) {
+        char name[128], url[900];
+        if (sscanf(line, "%127[^|]|%899[^\n]", name, url) == 2) {
+            printf(" - %s: %s\n", name, url);
+        }
+    }
+
+    fclose(f);
+}
 
 void save_repo_url(const char* url) {
     FILE* f = fopen(CONFIG_FILE, "w");
@@ -20,12 +44,38 @@ void save_repo_url(const char* url) {
         fclose(f);
     }
 }
+void sync_all_repos() {
+    FILE* f = fopen(CONFIG_FILE, "r");
+    if (!f) return;
+
+    char line[1024];
+    while (fgets(line, sizeof(line), f)) {
+        char name[64], url[960];
+        if (sscanf(line, "%63[^|]|%959[^\n]", name, url) == 2) {
+            char dest[1024];
+            sprintf(dest, "%s/%s", REPO_FOLDER, name);
+            if (_access(dest, 0) != 0) {
+                printf("Cloning %s...\n", name);
+                char cmd[2048];
+                sprintf(cmd, "git clone %s %s", url, dest);
+                system(cmd);
+            } else {
+                printf("Pulling %s...\n", name);
+                char cmd[2048];
+                sprintf(cmd, "git -C %s pull", dest);
+                system(cmd);
+            }
+        }
+    }
+
+    fclose(f);
+}
 
 void read_repo_url(char* buffer, size_t size) {
     FILE* f = fopen(CONFIG_FILE, "r");
     if (f) {
         fgets(buffer, size, f);
-        buffer[strcspn(buffer, "\n")] = 0; // remove newline
+        buffer[strcspn(buffer, "\n")] = 0;
         fclose(f);
     } else {
         printf("Enter your Git repository URL: ");
@@ -47,6 +97,14 @@ void git_sync(const char* repo_url) {
     }
 }
 
+void log_installed(const char* name, const char* id, const char* version) {
+    FILE* f = fopen(INSTALLED_FILE, "a+");
+    if (f) {
+        fprintf(f, "{ \"name\": \"%s\", \"id\": \"%s\", \"version\": \"%s\" },\n", name, id, version);
+        fclose(f);
+    }
+}
+
 void install_package(const char* pkg_name) {
     char filepath[512];
     sprintf(filepath, "%s/%s.json", REPO_FOLDER, pkg_name);
@@ -58,12 +116,15 @@ void install_package(const char* pkg_name) {
     }
 
     char url[1024] = {0}, silent[128] = {0}, id[64] = {0}, type[8] = {0};
+    char name[128] = {0}, version[64] = {0};
     char line[2048];
     while (fgets(line, sizeof(line), fp)) {
         if (strstr(line, "\"url\"")) sscanf(line, " \"url\" : \"%[^\"]\"", url);
         else if (strstr(line, "\"silent\"")) sscanf(line, " \"silent\" : \"%[^\"]\"", silent);
         else if (strstr(line, "\"id\"")) sscanf(line, " \"id\" : \"%[^\"]\"", id);
         else if (strstr(line, "\"type\"")) sscanf(line, " \"type\" : \"%[^\"]\"", type);
+        else if (strstr(line, "\"name\"")) sscanf(line, " \"name\" : \"%[^\"]\"", name);
+        else if (strstr(line, "\"version\"")) sscanf(line, " \"version\" : \"%[^\"]\"", version);
     }
     fclose(fp);
 
@@ -94,6 +155,9 @@ void install_package(const char* pkg_name) {
     WaitForSingleObject(sei.hProcess, INFINITE);
     CloseHandle(sei.hProcess);
     printf("Installed %s successfully.\n", id);
+
+    // Log it
+    log_installed(name, id, version);
 }
 
 void list_packages() {
@@ -133,10 +197,72 @@ void list_packages() {
     _findclose(hFile);
 }
 
+void check_updates() {
+    FILE* installed = fopen(INSTALLED_FILE, "r");
+    if (!installed) {
+        printf("No installed packages recorded.\n");
+        return;
+    }
+
+    char line[512];
+    while (fgets(line, sizeof(line), installed)) {
+        char name[128] = {0}, id[64] = {0}, version_installed[64] = {0};
+        sscanf(line, " { \"name\": \"%[^\"]\", \"id\": \"%[^\"]\", \"version\": \"%[^\"]\" }", name, id, version_installed);
+
+        char filepath[512];
+        sprintf(filepath, "%s/%s.json", REPO_FOLDER, id);
+        FILE* pkg = fopen(filepath, "r");
+        if (!pkg) continue;
+
+        char version_repo[64] = {0}, line2[512];
+        while (fgets(line2, sizeof(line2), pkg)) {
+            if (strstr(line2, "\"version\"")) {
+                sscanf(line2, " \"version\" : \"%[^\"]\"", version_repo);
+                break;
+            }
+        }
+        fclose(pkg);
+
+        if (strcmp(version_installed, version_repo) != 0) {
+            printf("Update available: %s (%s → %s)\n", name, version_installed, version_repo);
+        }
+    }
+    fclose(installed);
+}
+
+
+void install_from_package_json() {
+    FILE* f = fopen(INSTALLED_FILE, "r");
+    if (!f) {
+        printf("No package.json found.\n");
+        return;
+    }
+
+    char line[512];
+    while (fgets(line, sizeof(line), f)) {
+        char id[64] = {0};
+        if (strstr(line, "\"id\"")) {
+            sscanf(line, "%*[^:]: \"%[^\"]\"", id);
+
+            // Build path to repo's JSON
+            char pkg_path[512];
+            sprintf(pkg_path, "%s/%s.json", REPO_FOLDER, id);
+
+            if (_access(pkg_path, 0) == 0) {
+                printf("Installing from repo: %s\n", id);
+                install_package(id);  // reuse your existing install function
+            } else {
+                printf("Package not found in repo: %s\n", id);
+            }
+        }
+    }
+    fclose(f);
+}
+
+
 int main(int argc, char *argv[]) {
     char repo_url[1024] = {0};
 
-    // handle --set-repo <url>
     if (argc == 3 && strcmp(argv[1], "-Sr") == 0) {
         save_repo_url(argv[2]);
         printf("Repository URL saved.\n");
@@ -147,10 +273,12 @@ int main(int argc, char *argv[]) {
 
     if (argc < 2) {
         printf("Usage:\n");
-        printf("  pkg -Q [list packages]\n");
-        printf("  pkg -S <pkg-name> [Install packages]\n");
-        printf("  pkg -Sy [Refresh package list]\n");
-        printf("  pkg -Sr <url> [set repo packages]\n");
+        printf("  pkg -Q        [List packages]\n");
+        printf("  pkg -S <pkg>  [Install package]\n");
+        printf("  pkg -Sy       [Refresh package list]\n");
+        printf("  pkg -Su       [Check for updates]\n");
+        printf("  pkg -Sr <url> [Set repo URL]\n");
+        printf("  pkg -Si [Import package.json]\n");
         return 0;
     }
 
@@ -159,20 +287,18 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-    git_sync(repo_url);
-
+else if (strcmp(argv[1], "-Si") == 0) {
+    install_from_package_json();
+}
     if (strcmp(argv[1], "-Q") == 0) {
         list_packages();
-    } else if (strcmp(argv[1], "-S") == 0) {
-        if (argc < 3) {
-            printf("Please provide a package name.\n");
-            return 1;
-        }
+    } else if (strcmp(argv[1], "-S") == 0 && argc >= 3) {
         install_package(argv[2]);
+    } else if (strcmp(argv[1], "-Su") == 0) {
+        check_updates();
     } else {
         printf("Unknown command.\n");
     }
 
     return 0;
 }
-
