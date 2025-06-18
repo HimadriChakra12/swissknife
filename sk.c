@@ -10,12 +10,65 @@
 #define CONFIG_FILE "C:/farm/wheats/Swissknife/.pkgconfig"
 #define INSTALLED_FILE "C:/farm/wheats/Swissknife/package.json"
 
+void save_repo(const char* name, const char* url) {
+    FILE* f = fopen(CONFIG_FILE, "a");
+    if (f) {
+        fprintf(f, "%s|%s\n", name, url);
+        fclose(f);
+    }
+}
+
+void list_repos() {
+    FILE* f = fopen(CONFIG_FILE, "r");
+    if (!f) {
+        printf("No repos configured.\n");
+        return;
+    }
+
+    printf("Configured repos:\n");
+    char line[1024];
+    while (fgets(line, sizeof(line), f)) {
+        char name[128], url[900];
+        if (sscanf(line, "%127[^|]|%899[^\n]", name, url) == 2) {
+            printf(" - %s: %s\n", name, url);
+        }
+    }
+
+    fclose(f);
+}
+
 void save_repo_url(const char* url) {
     FILE* f = fopen(CONFIG_FILE, "w");
     if (f) {
         fprintf(f, "%s\n", url);
         fclose(f);
     }
+}
+void sync_all_repos() {
+    FILE* f = fopen(CONFIG_FILE, "r");
+    if (!f) return;
+
+    char line[1024];
+    while (fgets(line, sizeof(line), f)) {
+        char name[64], url[960];
+        if (sscanf(line, "%63[^|]|%959[^\n]", name, url) == 2) {
+            char dest[1024];
+            sprintf(dest, "%s/%s", REPO_FOLDER, name);
+            if (_access(dest, 0) != 0) {
+                printf("Cloning %s...\n", name);
+                char cmd[2048];
+                sprintf(cmd, "git clone %s %s", url, dest);
+                system(cmd);
+            } else {
+                printf("Pulling %s...\n", name);
+                char cmd[2048];
+                sprintf(cmd, "git -C %s pull", dest);
+                system(cmd);
+            }
+        }
+    }
+
+    fclose(f);
 }
 
 void read_repo_url(char* buffer, size_t size) {
@@ -52,13 +105,13 @@ void log_installed(const char* name, const char* id, const char* version) {
     }
 }
 
-void install_package(const char* pkg_name) {
+void install_package(const char* sk_name) {
     char filepath[512];
-    sprintf(filepath, "%s/%s.json", REPO_FOLDER, pkg_name);
+    sprintf(filepath, "%s/%s.json", REPO_FOLDER, sk_name);
 
     FILE* fp = fopen(filepath, "r");
     if (!fp) {
-        printf("Package '%s' not found.\n", pkg_name);
+        printf("Package '%s' not found.\n", sk_name);
         return;
     }
 
@@ -158,17 +211,17 @@ void check_updates() {
 
         char filepath[512];
         sprintf(filepath, "%s/%s.json", REPO_FOLDER, id);
-        FILE* pkg = fopen(filepath, "r");
-        if (!pkg) continue;
+        FILE* sk = fopen(filepath, "r");
+        if (!sk) continue;
 
         char version_repo[64] = {0}, line2[512];
-        while (fgets(line2, sizeof(line2), pkg)) {
+        while (fgets(line2, sizeof(line2), sk)) {
             if (strstr(line2, "\"version\"")) {
                 sscanf(line2, " \"version\" : \"%[^\"]\"", version_repo);
                 break;
             }
         }
-        fclose(pkg);
+        fclose(sk);
 
         if (strcmp(version_installed, version_repo) != 0) {
             printf("Update available: %s (%s → %s)\n", name, version_installed, version_repo);
@@ -192,10 +245,10 @@ void install_from_package_json() {
             sscanf(line, "%*[^:]: \"%[^\"]\"", id);
 
             // Build path to repo's JSON
-            char pkg_path[512];
-            sprintf(pkg_path, "%s/%s.json", REPO_FOLDER, id);
+            char sk_path[512];
+            sprintf(sk_path, "%s/%s.json", REPO_FOLDER, id);
 
-            if (_access(pkg_path, 0) == 0) {
+            if (_access(sk_path, 0) == 0) {
                 printf("Installing from repo: %s\n", id);
                 install_package(id);  // reuse your existing install function
             } else {
@@ -220,12 +273,12 @@ int main(int argc, char *argv[]) {
 
     if (argc < 2) {
         printf("Usage:\n");
-        printf("  pkg -Q        [List packages]\n");
-        printf("  pkg -S <pkg>  [Install package]\n");
-        printf("  pkg -Sy       [Refresh package list]\n");
-        printf("  pkg -Su       [Check for updates]\n");
-        printf("  pkg -Sr <url> [Set repo URL]\n");
-        printf("  pkg -Si [Import package.json]\n");
+        printf("  sk -Q        [List packages]\n");
+        printf("  sk -S <sk>  [Install package]\n");
+        printf("  sk -Sy       [Refresh package list]\n");
+        printf("  sk -Su       [Check for updates]\n");
+        printf("  sk -Sr <url> [Set repo URL]\n");
+        printf("  sk -Si [Import package.json]\n");
         return 0;
     }
 

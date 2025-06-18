@@ -9,7 +9,7 @@ if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
 $path = "C:/farm/wheats/Swissknife"
 
 $docs = @(
-    @{url = "https://github.com/HimadriChakra12/swissknife/releases/download/0.0.1/sk.exe" ; outfile = "$env:TEMP/sk.exe"; file = "C:/farm/wheats/swissknife/sk.exe"}
+    @{url = "https://github.com/HimadriChakra12/swissknife/releases/download/0.0.2/sk.exe" ; outfile = "$env:TEMP/sk.exe"; file = "C:/farm/wheats/swissknife/sk.exe"}
 )
 
 if (-not (test-path $path)){
