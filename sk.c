@@ -63,7 +63,7 @@ void install_package(const char* sk_name) {
     }
 
     char url[1024] = {0}, silent[128] = {0}, id[64] = {0}, type[8] = {0};
-    char name[128] = {0}, version[64] = {0};
+    char name[128] = {0}, version[64] = {0}, installer[64] = {0};
     char line[2048];
     while (fgets(line, sizeof(line), fp)) {
         if (strstr(line, "\"url\"")) sscanf(line, " \"url\" : \"%[^\"]\"", url);
@@ -72,8 +72,21 @@ void install_package(const char* sk_name) {
         else if (strstr(line, "\"type\"")) sscanf(line, " \"type\" : \"%[^\"]\"", type);
         else if (strstr(line, "\"name\"")) sscanf(line, " \"name\" : \"%[^\"]\"", name);
         else if (strstr(line, "\"version\"")) sscanf(line, " \"version\" : \"%[^\"]\"", version);
+        else if (strstr(line, "\"installer\"")) sscanf(line, " \"installer\" : \"%[^\"]\"", installer);
     }
     fclose(fp);
+
+    if (strlen(silent) == 0) {
+        if (strcmp(installer, "nsis") == 0) strcpy(silent, "/S");
+        else if (strcmp(installer, "inno") == 0) strcpy(silent, "/VERYSILENT /SUPPRESSMSGBOXES");
+        else if (strcmp(installer, "msi") == 0) strcpy(silent, "/quiet /norestart");
+        else if (strcmp(installer, "installshield") == 0) strcpy(silent, "/s /v\"/qn\"");
+        else if (strcmp(installer, "squirrel") == 0) strcpy(silent, "--silent");
+        else {
+            printf("Warning: Unknown installer type '%s'. Proceeding interactively.\n", installer);
+            silent[0] = '\0';
+        }
+    }
 
     char out_path[MAX_PATH];
     sprintf(out_path, "%s\\%s.%s", getenv("TEMP"), id, type);
@@ -90,7 +103,7 @@ void install_package(const char* sk_name) {
     sei.fMask = SEE_MASK_NOCLOSEPROCESS;
     sei.lpFile = out_path;
     sei.lpParameters = silent;
-    sei.nShow = SW_HIDE;
+    sei.nShow = silent[0] ? SW_HIDE : SW_SHOWNORMAL;
     sei.lpVerb = "open";
 
     printf("Installing %s...\n", id);
