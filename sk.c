@@ -10,65 +10,12 @@
 #define CONFIG_FILE "C:/farm/wheats/Swissknife/.pkgconfig"
 #define INSTALLED_FILE "C:/farm/wheats/Swissknife/package.json"
 
-void save_repo(const char* name, const char* url) {
-    FILE* f = fopen(CONFIG_FILE, "a");
-    if (f) {
-        fprintf(f, "%s|%s\n", name, url);
-        fclose(f);
-    }
-}
-
-void list_repos() {
-    FILE* f = fopen(CONFIG_FILE, "r");
-    if (!f) {
-        printf("No repos configured.\n");
-        return;
-    }
-
-    printf("Configured repos:\n");
-    char line[1024];
-    while (fgets(line, sizeof(line), f)) {
-        char name[128], url[900];
-        if (sscanf(line, "%127[^|]|%899[^\n]", name, url) == 2) {
-            printf(" - %s: %s\n", name, url);
-        }
-    }
-
-    fclose(f);
-}
-
 void save_repo_url(const char* url) {
     FILE* f = fopen(CONFIG_FILE, "w");
     if (f) {
         fprintf(f, "%s\n", url);
         fclose(f);
     }
-}
-void sync_all_repos() {
-    FILE* f = fopen(CONFIG_FILE, "r");
-    if (!f) return;
-
-    char line[1024];
-    while (fgets(line, sizeof(line), f)) {
-        char name[64], url[960];
-        if (sscanf(line, "%63[^|]|%959[^\n]", name, url) == 2) {
-            char dest[1024];
-            sprintf(dest, "%s/%s", REPO_FOLDER, name);
-            if (_access(dest, 0) != 0) {
-                printf("Cloning %s...\n", name);
-                char cmd[2048];
-                sprintf(cmd, "git clone %s %s", url, dest);
-                system(cmd);
-            } else {
-                printf("Pulling %s...\n", name);
-                char cmd[2048];
-                sprintf(cmd, "git -C %s pull", dest);
-                system(cmd);
-            }
-        }
-    }
-
-    fclose(f);
 }
 
 void read_repo_url(char* buffer, size_t size) {
@@ -156,8 +103,138 @@ void install_package(const char* sk_name) {
     CloseHandle(sei.hProcess);
     printf("Installed %s successfully.\n", id);
 
-    // Log it
     log_installed(name, id, version);
+}
+
+void list_installed_packages() {
+    FILE* f = fopen(INSTALLED_FILE, "r");
+    if (!f) {
+        printf("No packages installed.\n");
+        return;
+    }
+    char line[512];
+    printf("Installed packages:\n");
+    while (fgets(line, sizeof(line), f)) {
+        char name[128] = {0}, id[64] = {0};
+        sscanf(line, " { \"name\": \"%[^\"]\", \"id\": \"%[^\"]\"", name, id);
+        printf("  %s (%s)\n", name, id);
+    }
+    fclose(f);
+}
+
+void show_installed_info(const char* pkg_id) {
+    FILE* f = fopen(INSTALLED_FILE, "r");
+    if (!f) {
+        printf("No installed packages recorded.\n");
+        return;
+    }
+    char line[1024];
+    int found = 0;
+    while (fgets(line, sizeof(line), f)) {
+        char name[128] = {0}, id[64] = {0}, version[64] = {0};
+        sscanf(line, " { \"name\": \"%[^\"]\", \"id\": \"%[^\"]\", \"version\": \"%[^\"]\" }", name, id, version);
+        if (strcmp(id, pkg_id) == 0) {
+            printf("Name            : %s\n", name);
+            printf("Version         : %s\n", version);
+            printf("ID              : %s\n", id);
+            found = 1;
+            break;
+        }
+    }
+    fclose(f);
+    if (!found) printf("error: package '%s' not found in installed list\n", pkg_id);
+}
+
+void search_repo_package(const char* query) {
+    struct _finddata_t file;
+    intptr_t hFile;
+    char path[512];
+    sprintf(path, "%s/*.json", REPO_FOLDER);
+    hFile = _findfirst(path, &file);
+    if (hFile == -1L) {
+        printf("No packages found in repo.\n");
+        return;
+    }
+    int found = 0;
+    do {
+        char fullpath[512];
+        sprintf(fullpath, "%s/%s", REPO_FOLDER, file.name);
+        FILE* fp = fopen(fullpath, "r");
+        if (!fp) continue;
+        char name[128] = {0}, id[64] = {0}, version[64] = {0}, line[1024];
+        while (fgets(line, sizeof(line), fp)) {
+            if (strstr(line, "\"name\"")) sscanf(line, " \"name\" : \"%[^\"]\"", name);
+            else if (strstr(line, "\"id\"")) sscanf(line, " \"id\" : \"%[^\"]\"", id);
+            else if (strstr(line, "\"version\"")) sscanf(line, " \"version\" : \"%[^\"]\"", version);
+        }
+        fclose(fp);
+        if (strstr(id, query) || strstr(name, query)) {
+            found = 1;
+            printf("%s - %s (%s)\n", id, name, version);
+        }
+    } while (_findnext(hFile, &file) == 0);
+    _findclose(hFile);
+    if (!found) printf("No matching packages found in repo for '%s'\n", query);
+}
+
+void install_from_package_json() {
+    FILE* f = fopen(INSTALLED_FILE, "r");
+    if (!f) {
+        printf("No package.json found.\n");
+        return;
+    }
+
+    char line[512];
+    while (fgets(line, sizeof(line), f)) {
+        char id[64] = {0};
+        if (strstr(line, "\"id\"")) {
+            sscanf(line, "%*[^:]: \"%[^\"]\"", id);
+
+            char sk_path[512];
+            sprintf(sk_path, "%s/%s.json", REPO_FOLDER, id);
+
+            if (_access(sk_path, 0) == 0) {
+                printf("Installing from repo: %s\n", id);
+                install_package(id);
+            } else {
+                printf("Package not found in repo: %s\n", id);
+            }
+        }
+    }
+    fclose(f);
+}
+
+void check_updates() {
+    FILE* installed = fopen(INSTALLED_FILE, "r");
+    if (!installed) {
+        printf("No installed packages recorded.\n");
+        return;
+    }
+
+    char line[512];
+    while (fgets(line, sizeof(line), installed)) {
+        char name[128] = {0}, id[64] = {0}, version_installed[64] = {0};
+        sscanf(line, " { \"name\": \"%[^\"]\", \"id\": \"%[^\"]\", \"version\": \"%[^\"]\" }", name, id, version_installed);
+
+        char filepath[512];
+        sprintf(filepath, "%s/%s.json", REPO_FOLDER, id);
+        FILE* sk = fopen(filepath, "r");
+        if (!sk) continue;
+
+        char version_repo[64] = {0}, line2[512];
+        while (fgets(line2, sizeof(line2), sk)) {
+            if (strstr(line2, "\"version\"")) {
+                sscanf(line2, " \"version\" : \"%[^\"]\"", version_repo);
+                break;
+            }
+        }
+        fclose(sk);
+
+        if (strcmp(version_installed, version_repo) != 0) {
+            printf("Update available: %s (%s → %s)\n", name, version_installed, version_repo);
+        }
+    }
+    fclose(installed);
 }
 
 void list_packages() {
@@ -197,70 +274,7 @@ void list_packages() {
     _findclose(hFile);
 }
 
-void check_updates() {
-    FILE* installed = fopen(INSTALLED_FILE, "r");
-    if (!installed) {
-        printf("No installed packages recorded.\n");
-        return;
-    }
-
-    char line[512];
-    while (fgets(line, sizeof(line), installed)) {
-        char name[128] = {0}, id[64] = {0}, version_installed[64] = {0};
-        sscanf(line, " { \"name\": \"%[^\"]\", \"id\": \"%[^\"]\", \"version\": \"%[^\"]\" }", name, id, version_installed);
-
-        char filepath[512];
-        sprintf(filepath, "%s/%s.json", REPO_FOLDER, id);
-        FILE* sk = fopen(filepath, "r");
-        if (!sk) continue;
-
-        char version_repo[64] = {0}, line2[512];
-        while (fgets(line2, sizeof(line2), sk)) {
-            if (strstr(line2, "\"version\"")) {
-                sscanf(line2, " \"version\" : \"%[^\"]\"", version_repo);
-                break;
-            }
-        }
-        fclose(sk);
-
-        if (strcmp(version_installed, version_repo) != 0) {
-            printf("Update available: %s (%s → %s)\n", name, version_installed, version_repo);
-        }
-    }
-    fclose(installed);
-}
-
-
-void install_from_package_json() {
-    FILE* f = fopen(INSTALLED_FILE, "r");
-    if (!f) {
-        printf("No package.json found.\n");
-        return;
-    }
-
-    char line[512];
-    while (fgets(line, sizeof(line), f)) {
-        char id[64] = {0};
-        if (strstr(line, "\"id\"")) {
-            sscanf(line, "%*[^:]: \"%[^\"]\"", id);
-
-            // Build path to repo's JSON
-            char sk_path[512];
-            sprintf(sk_path, "%s/%s.json", REPO_FOLDER, id);
-
-            if (_access(sk_path, 0) == 0) {
-                printf("Installing from repo: %s\n", id);
-                install_package(id);  // reuse your existing install function
-            } else {
-                printf("Package not found in repo: %s\n", id);
-            }
-        }
-    }
-    fclose(f);
-}
-
-
-int main(int argc, char *argv[]) {
+int main(int argc, char* argv[]) {
     char repo_url[1024] = {0};
 
     if (argc == 3 && strcmp(argv[1], "-Sr") == 0) {
@@ -273,12 +287,14 @@ int main(int argc, char *argv[]) {
 
     if (argc < 2) {
         printf("Usage:\n");
-        printf("  sk -Q        [List packages]\n");
-        printf("  sk -S <sk>  [Install package]\n");
-        printf("  sk -Sy       [Refresh package list]\n");
-        printf("  sk -Su       [Check for updates]\n");
-        printf("  sk -Sr <url> [Set repo URL]\n");
-        printf("  sk -Si [Import package.json]\n");
+        printf("  sk -Q                  [List installed packages]\n");
+        printf("  sk -Q --info <sk>      [Show installed package info]\n");
+        printf("  sk -Ql                 [List All packages in the Repo]\n");
+        printf("  sk -Ss <sk>            [Search for package in repo]\n");
+        printf("  sk -S <sk>             [Install package]\n");
+        printf("  sk -Sy                 [Refresh package list]\n");
+        printf("  sk -Si                 [Install from Package.json]\n");
+        printf("  sk -Sr <url>           [Set repo URL]\n");
         return 0;
     }
 
@@ -287,18 +303,41 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-else if (strcmp(argv[1], "-Si") == 0) {
-    install_from_package_json();
-}
     if (strcmp(argv[1], "-Q") == 0) {
-        list_packages();
-    } else if (strcmp(argv[1], "-S") == 0 && argc >= 3) {
-        install_package(argv[2]);
-    } else if (strcmp(argv[1], "-Su") == 0) {
-        check_updates();
-    } else {
-        printf("Unknown command.\n");
+        if (argc == 2) {
+            list_installed_packages();
+        } else if (argc == 4 && strcmp(argv[2], "--info") == 0) {
+            show_installed_info(argv[3]);
+        } else {
+            printf("Usage:\n  sk -Q              [List installed packages]\n  sk -Q --info <pkg> [Show info]\n");
+        }
+        return 0;
     }
 
+    if (strcmp(argv[1], "-Si") == 0) {
+        install_from_package_json();
+    }
+
+    if (strcmp(argv[1], "-Su") == 0) {
+        check_updates();
+    }
+
+    git_sync(repo_url);
+
+    if (strcmp(argv[1], "-Ql") == 0) {
+        list_packages();
+    }
+
+    if (strcmp(argv[1], "-Ss") == 0 && argc == 3) {
+        search_repo_package(argv[2]);
+        return 0;
+    }
+
+    if (strcmp(argv[1], "-S") == 0 && argc == 3) {
+        install_package(argv[2]);
+        return 0;
+    }
+
+    printf("Unknown command. Run without arguments for help.\n");
     return 0;
 }
