@@ -45,7 +45,23 @@ void git_sync(const char* repo_url) {
 }
 
 void log_installed(const char* name, const char* id, const char* version) {
-    FILE* f = fopen(INSTALLED_FILE, "a+");
+    FILE* f = fopen(INSTALLED_FILE, "r");
+    if (f) {
+        char line[1024];
+        while (fgets(line, sizeof(line), f)) {
+            char existing_id[64] = {0};
+            if (sscanf(line, " { \"name\": \"%*[^\"]\", \"id\": \"%63[^\"]\"", existing_id) == 1) {
+                if (strcmp(existing_id, id) == 0) {
+                    fclose(f);
+                    printf("Package %s already logged. Skipping.\n", id);
+                    return;
+                }
+            }
+        }
+        fclose(f);
+    }
+
+    f = fopen(INSTALLED_FILE, "a");
     if (f) {
         fprintf(f, "{ \"name\": \"%s\", \"id\": \"%s\", \"version\": \"%s\" },\n", name, id, version);
         fclose(f);
@@ -77,14 +93,18 @@ void install_package(const char* sk_name) {
     fclose(fp);
 
     if (strlen(silent) == 0) {
-        if (strcmp(installer, "nsis") == 0) strcpy(silent, "/S");
-        else if (strcmp(installer, "inno") == 0) strcpy(silent, "/VERYSILENT /SUPPRESSMSGBOXES");
-        else if (strcmp(installer, "msi") == 0) strcpy(silent, "/quiet /norestart");
-        else if (strcmp(installer, "installshield") == 0) strcpy(silent, "/s /v\"/qn\"");
-        else if (strcmp(installer, "squirrel") == 0) strcpy(silent, "--silent");
-        else {
-            printf("Warning: Unknown installer type '%s'. Proceeding interactively.\n", installer);
-            silent[0] = '\0';
+        if (strlen(installer) > 0) {
+            if (strcmp(installer, "nsis") == 0) strcpy(silent, "/S");
+            else if (strcmp(installer, "inno") == 0) strcpy(silent, "/VERYSILENT /SUPPRESSMSGBOXES");
+            else if (strcmp(installer, "msi") == 0) strcpy(silent, "/quiet /norestart");
+            else if (strcmp(installer, "installshield") == 0) strcpy(silent, "/s /v\"/qn\"");
+            else if (strcmp(installer, "squirrel") == 0) strcpy(silent, "--silent");
+            else {
+                printf("Warning: Unknown installer type '%s'. Proceeding interactively.\n", installer);
+                silent[0] = '\0';
+            }
+        } else {
+            printf("No silent or installer field provided. Proceeding interactively.\n");
         }
     }
 

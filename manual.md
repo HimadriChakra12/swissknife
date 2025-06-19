@@ -6,29 +6,26 @@
 https://github.com/HimadriChakra12/knives.git
 ```
 2. If You want to make a Package you will need a `.json` for the package.
-You Will Need `name`, `id`, `url`, `type`, `silent`.
+You Will Need `name`, `id`, `url`,`version`, `type`, `installer`, `silent`.
 For example,
 ```
 {
-  "name": "Firefox",
-  "id": "firefox",
-  "url": "https://download.mozilla.org/?product=firefox-latest&os=win64&lang=en-US",
+  "name": "qimgv",
+  "id": "qimgv",
+  "url": "https://github.com/easymodo/qimgv/releases/download/v1.0.2/qimgv-x64_1.0.2.exe",
+  "version": "1.0.2",
   "type": "exe",
-  "silent": "/S"
+  "installer": "inno",
+  "silent": ""
 }
 ```
-- Name and Id will specify the package. Url will have the download link.
-- `Silent` has `/S` that will exicute the setup file in silent mode. It means it will run in silent mode so automatic setup.
 
-For .exe:
-```
-/S: Runs the installation with no user interface (completely silent).
-```
+- Name and Id will specify the package. Url will have the download link. Versions are for checking updates
+- Installer Specifies what type of setup file it is. Installer will add commands as according automatically.
 
-For .msi:
 ```
-/qn: Runs the installation with no user interface (completely silent).
-/qb: Displays a basic user interface with a progress bar.
-/qr: Displays a reduced user interface without wizard dialogs.
-/passive: Displays a progress bar only, similar to /qb, but with a modal dialog box at the end.
+"installer": "nsis"       → /S
+"installer": "msi"        → /quiet /norestart
+"installer": "inno"       → /VERYSILENT /SUPPRESSMSGBOXES
+"installer": "squirrel"   → --silent
 ```
