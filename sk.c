@@ -5,6 +5,8 @@
 #include <string.h>
 #include <io.h>
 #include <stdint.h>
+#include <urlmon.h>
+#pragma comment(lib, "urlmon.lib")
 
 #define REPO_FOLDER "C:/farm/wheats/Swissknife/knives"
 #define CONFIG_FILE "C:/farm/wheats/Swissknife/.pkgconfig"
@@ -68,6 +70,16 @@ void log_installed(const char* name, const char* id, const char* version) {
     }
 }
 
+
+
+int download_file(const char* url, const char* out_path) {
+    char cmd[2048];
+    sprintf(cmd,
+        "powershell -Command \"Start-BitsTransfer -Source '%s' -Destination '%s'\"",
+        url, out_path);
+    return system(cmd);
+}
+
 void install_package(const char* sk_name) {
     char filepath[512];
     sprintf(filepath, "%s/%s.json", REPO_FOLDER, sk_name);
@@ -92,28 +104,19 @@ void install_package(const char* sk_name) {
     }
     fclose(fp);
 
-    if (strlen(silent) == 0) {
-        if (strlen(installer) > 0) {
-            if (strcmp(installer, "nsis") == 0) strcpy(silent, "/S");
-            else if (strcmp(installer, "inno") == 0) strcpy(silent, "/VERYSILENT /SUPPRESSMSGBOXES");
-            else if (strcmp(installer, "msi") == 0) strcpy(silent, "/quiet /norestart");
-            else if (strcmp(installer, "installshield") == 0) strcpy(silent, "/s /v\"/qn\"");
-            else if (strcmp(installer, "squirrel") == 0) strcpy(silent, "--silent");
-            else {
-                printf("Warning: Unknown installer type '%s'. Proceeding interactively.\n", installer);
-                silent[0] = '\0';
-            }
-        } else {
-            printf("No silent or installer field provided. Proceeding interactively.\n");
-        }
+    if (strlen(silent) == 0 && strlen(installer) > 0) {
+        if (strcmp(installer, "nsis") == 0) strcpy(silent, "/S");
+        else if (strcmp(installer, "inno") == 0) strcpy(silent, "/VERYSILENT /SUPPRESSMSGBOXES");
+        else if (strcmp(installer, "msi") == 0) strcpy(silent, "/quiet /norestart");
+        else if (strcmp(installer, "installshield") == 0) strcpy(silent, "/s /v\"/qn\"");
+        else if (strcmp(installer, "squirrel") == 0) strcpy(silent, "--silent");
     }
 
     char out_path[MAX_PATH];
     sprintf(out_path, "%s\\%s.%s", getenv("TEMP"), id, type);
 
-    printf("Downloading %s...\n", url);
-    HRESULT hr = URLDownloadToFileA(NULL, url, out_path, 0, NULL);
-    if (hr != S_OK) {
+    printf("Downloading %s...\n", id);
+    if (download_file(url, out_path) != 0) {
         printf("Download failed.\n");
         return;
     }
