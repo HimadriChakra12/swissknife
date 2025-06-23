@@ -13,27 +13,15 @@ Copy and paste the code to Powershell. Run it will automatically install SwissKn
 ## [Sa]usage
 It has a pacman type option to install with a alias of `sk`
 
-1. Installations
-
 ```
-sudo sk -S <package_name>
-```
-
-2. Package List
-
-```
-sudo sk -Q
-```
-
-3. Repo Refresh
-
-```
-sudo sk -Sy
-```
-
-4. Adding New Repo
-
-```
-sudo sk -Sr <repo_git>
+  sk -Q                  [List installed packages]\n
+  sk -Q --info <sk>      [Show installed package info]\n
+  sk -Ql                 [List All packages in the Repo]\n
+  sk -Ss <sk>            [Search for package in repo]\n
+  sk -S <sk>             [Install package]\n
+  sk -Sy                 [Refresh package list]\n
+  sk -Si                 [Install from Package.json]\n
+  sk -Su                 [Check for updates]\n
+  sk -Sr <url>           [Set repo URL]\n
 ```
 
