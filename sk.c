@@ -111,8 +111,8 @@ int parse_package_json(const char* filepath, Package* pkg) {
 int download_file(const char* url, const char* out_path) {
     char cmd[2048];
     sprintf(cmd,
-        "powershell -WindowStyle Hidden -Command \"Start-BitsTransfer -Source '%s' -Destination '%s'\"",
-        url, out_path);
+            "powershell -WindowStyle Hidden -Command \"Start-BitsTransfer -Source '%s' -Destination '%s'\"",
+            url, out_path);
     return system(cmd);
 }
 
@@ -228,6 +228,149 @@ void download_and_install_packages(int count, char* package_names[]) {
 
     free(packages);
 }
+void check_updates() {
+    FILE* installed = fopen(INSTALLED_FILE, "r");
+    if (!installed) {
+        printf("No installed packages recorded.\n");
+        return;
+    }
+    char line[512];
+    while (fgets(line, sizeof(line), installed)) {
+        char name[128] = {0}, id[64] = {0}, version_installed[64] = {0};
+        sscanf(line, " { \"name\": \"%[^\"]\", \"id\": \"%[^\"]\", \"version\": \"%[^\"]\" }", name, id, version_installed);
+        char filepath[512];
+        sprintf(filepath, "%s/%s.json", REPO_FOLDER, id);
+        FILE* pkg = fopen(filepath, "r");
+        if (!pkg) continue;
+        char version_repo[64] = {0}, line2[512];
+        while (fgets(line2, sizeof(line2), pkg)) {
+            if (strstr(line2, "\"version\"")) {
+                sscanf(line2, " \"version\" : \"%[^\"]\"", version_repo);
+                break;
+            }
+        }
+        fclose(pkg);
+        if (strcmp(version_installed, version_repo) != 0) {
+            printf("Update available: %s (%s → %s)\n", name, version_installed, version_repo);
+        }
+    }
+    fclose(installed);
+}
+void install_from_package_json() {
+    char* content = read_file(INSTALLED_FILE);
+    if (!content) {
+        printf("No package.json found.\n");
+        return;
+    }
+
+    cJSON* root = cJSON_Parse(content);
+    free(content);
+    if (!root) {
+        printf("Invalid package.json format.\n");
+        return;
+    }
+
+    int count = cJSON_GetArraySize(root);
+    if (count == 0) {
+        printf("No packages listed in package.json.\n");
+        cJSON_Delete(root);
+        return;
+    }
+
+    Package* packages = malloc(sizeof(Package) * count);
+    HANDLE* threads = malloc(sizeof(HANDLE) * count);
+    int actual_count = 0;
+
+    for (int i = 0; i < count; ++i) {
+        cJSON* item = cJSON_GetArrayItem(root, i);
+        cJSON* id = cJSON_GetObjectItem(item, "id");
+        if (!id || !cJSON_IsString(id)) continue;
+
+        char filepath[512];
+        sprintf(filepath, "%s/%s.json", REPO_FOLDER, id->valuestring);
+        if (parse_package_json(filepath, &packages[actual_count]) != 0) {
+            printf("Failed to load %s.json\n", id->valuestring);
+            continue;
+        }
+
+        threads[actual_count] = CreateThread(NULL, 0, download_thread, &packages[actual_count], 0, NULL);
+        actual_count++;
+    }
+
+    WaitForMultipleObjects(actual_count, threads, TRUE, INFINITE);
+    for (int i = 0; i < actual_count; ++i) {
+        if (threads[i]) CloseHandle(threads[i]);
+    }
+
+    wait_and_install_packages(actual_count, packages);
+    free(threads);
+    free(packages);
+    cJSON_Delete(root);
+}
+void list_packages() {
+    struct _finddata_t file;
+    intptr_t hFile;
+    char path[512];
+    sprintf(path, "%s/*.json", REPO_FOLDER);
+
+    hFile = _findfirst(path, &file);
+    if (hFile == -1L) {
+        printf("No packages found.\n");
+        return;
+    }
+
+    printf("Available packages:\n");
+    do {
+        char fullpath[512];
+        sprintf(fullpath, "%s/%s", REPO_FOLDER, file.name);
+        char* content = read_file(fullpath);
+        if (!content) continue;
+
+        cJSON* root = cJSON_Parse(content);
+        free(content);
+        if (!root) continue;
+
+        const cJSON* name = cJSON_GetObjectItem(root, "name");
+        const cJSON* id = cJSON_GetObjectItem(root, "id");
+
+        if (name && id) {
+            printf(" - %s (%s)\n", name->valuestring, id->valuestring);
+        }
+
+        cJSON_Delete(root);
+    } while (_findnext(hFile, &file) == 0);
+
+    _findclose(hFile);
+}
+void list_installed_packages() {
+    char* content = read_file(INSTALLED_FILE);
+    if (!content) {
+        printf("No packages installed.\n");
+        return;
+    }
+
+    cJSON* root = cJSON_Parse(content);
+    free(content);
+    if (!root || !cJSON_IsArray(root)) {
+        printf("Invalid installed package format.\n");
+        cJSON_Delete(root);
+        return;
+    }
+
+    printf("Installed packages:\n");
+    int len = cJSON_GetArraySize(root);
+    for (int i = 0; i < len; ++i) {
+        cJSON* item = cJSON_GetArrayItem(root, i);
+        if (!item) continue;
+        const cJSON* name = cJSON_GetObjectItem(item, "name");
+        const cJSON* id = cJSON_GetObjectItem(item, "id");
+        if (name && id) {
+            printf("  %s (%s)\n", name->valuestring, id->valuestring);
+        }
+    }
+
+    cJSON_Delete(root);
+}
 
 int main(int argc, char* argv[]) {
     installed_mutex = CreateMutex(NULL, FALSE, NULL);
@@ -260,18 +403,20 @@ int main(int argc, char* argv[]) {
     }
 
     if (strcmp(argv[1], "-Q") == 0) {
-        // List installed packages or show info if args provided
-        // ... you can implement this similarly as before
-        printf("List/show installed packages functionality not implemented in this snippet.\n");
+        list_installed_packages();
         return 0;
     }
-
+    if (strcmp(argv[1], "-Su") == 0) {
+        check_updates();
+    }
     if (strcmp(argv[1], "-Si") == 0) {
-        // Install from package.json - implement if needed
-        printf("Install from package.json functionality not implemented in this snippet.\n");
+        install_from_package_json();
         return 0;
     }
-
+    if (strcmp(argv[1], "-Ql") == 0) {
+        list_packages();
+        return 0;
+    }
     if (strcmp(argv[1], "-S") == 0 && argc >= 3) {
         git_sync(repo_url);
 
