@@ -1,3 +1,5 @@
+// sk.c - Swissknife with cJSON integration
+
 #include <windows.h>
 #include <shlwapi.h>
 #include <stdio.h>
@@ -6,11 +8,57 @@
 #include <io.h>
 #include <stdint.h>
 #include <urlmon.h>
+#include "cJSON.h"
 #pragma comment(lib, "urlmon.lib")
 
 #define REPO_FOLDER "C:/farm/wheats/Swissknife/knives"
 #define CONFIG_FILE "C:/farm/wheats/Swissknife/.pkgconfig"
 #define INSTALLED_FILE "C:/farm/wheats/Swissknife/package.json"
+
+typedef struct Package {
+    char name[128];
+    char id[64];
+    char version[64];
+    char url[1024];
+    char silent[128];
+    char type[16];
+    char installer[64];
+} Package;
+
+////////////////////
+// File utilities //
+////////////////////
+
+// Read entire file content to a string buffer (must free)
+char* read_file(const char* filepath) {
+    FILE* f = fopen(filepath, "rb");
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    rewind(f);
+    char* buffer = malloc(size + 1);
+    if (!buffer) {
+        fclose(f);
+        return NULL;
+    }
+    fread(buffer, 1, size, f);
+    buffer[size] = 0;
+    fclose(f);
+    return buffer;
+}
+
+// Write string data to file (overwrite)
+int write_file(const char* filepath, const char* data) {
+    FILE* f = fopen(filepath, "w");
+    if (!f) return -1;
+    fwrite(data, 1, strlen(data), f);
+    fclose(f);
+    return 0;
+}
+
+///////////////////////////
+// Repo URL Configuration //
+///////////////////////////
 
 void save_repo_url(const char* url) {
     FILE* f = fopen(CONFIG_FILE, "w");
@@ -23,7 +71,7 @@ void save_repo_url(const char* url) {
 void read_repo_url(char* buffer, size_t size) {
     FILE* f = fopen(CONFIG_FILE, "r");
     if (f) {
-        fgets(buffer, size, f);
+        fgets(buffer, (int)size, f);
         buffer[strcspn(buffer, "\n")] = 0;
         fclose(f);
     } else {
@@ -34,6 +82,10 @@ void read_repo_url(char* buffer, size_t size) {
     }
 }
 
+//////////////////////
+// Git synchronization //
+//////////////////////
+
 void git_sync(const char* repo_url) {
     if (_access(REPO_FOLDER, 0) != 0) {
         printf("Cloning repository...\n");
@@ -42,35 +94,112 @@ void git_sync(const char* repo_url) {
         system(cmd);
     } else {
         printf("Pulling latest packages...\n");
-        system("git -C " REPO_FOLDER " pull");
+        char cmd[1024];
+        sprintf(cmd, "git -C %s pull", REPO_FOLDER);
+        system(cmd);
     }
 }
 
-void log_installed(const char* name, const char* id, const char* version) {
-    FILE* f = fopen(INSTALLED_FILE, "r");
-    if (f) {
-        char line[1024];
-        while (fgets(line, sizeof(line), f)) {
-            char existing_id[64] = {0};
-            if (sscanf(line, " { \"name\": \"%*[^\"]\", \"id\": \"%63[^\"]\"", existing_id) == 1) {
-                if (strcmp(existing_id, id) == 0) {
-                    fclose(f);
-                    printf("Package %s already logged. Skipping.\n", id);
-                    return;
-                }
-            }
+/////////////////////////
+// Package JSON parsing //
+/////////////////////////
+
+int parse_package_json(const char* filepath, Package* pkg) {
+    char* content = read_file(filepath);
+    if (!content) return -1;
+
+    cJSON* root = cJSON_Parse(content);
+    free(content);
+    if (!root) return -2;
+
+    cJSON* item = NULL;
+
+    memset(pkg, 0, sizeof(Package));
+
+    item = cJSON_GetObjectItem(root, "name");
+    if (cJSON_IsString(item)) strncpy(pkg->name, item->valuestring, sizeof(pkg->name)-1);
+
+    item = cJSON_GetObjectItem(root, "id");
+    if (cJSON_IsString(item)) strncpy(pkg->id, item->valuestring, sizeof(pkg->id)-1);
+
+    item = cJSON_GetObjectItem(root, "version");
+    if (cJSON_IsString(item)) strncpy(pkg->version, item->valuestring, sizeof(pkg->version)-1);
+
+    item = cJSON_GetObjectItem(root, "url");
+    if (cJSON_IsString(item)) strncpy(pkg->url, item->valuestring, sizeof(pkg->url)-1);
+
+    item = cJSON_GetObjectItem(root, "silent");
+    if (cJSON_IsString(item)) strncpy(pkg->silent, item->valuestring, sizeof(pkg->silent)-1);
+    else pkg->silent[0] = 0;
+
+    item = cJSON_GetObjectItem(root, "type");
+    if (cJSON_IsString(item)) strncpy(pkg->type, item->valuestring, sizeof(pkg->type)-1);
+
+    item = cJSON_GetObjectItem(root, "installer");
+    if (cJSON_IsString(item)) strncpy(pkg->installer, item->valuestring, sizeof(pkg->installer)-1);
+    else pkg->installer[0] = 0;
+
+    cJSON_Delete(root);
+    return 0;
+}
+
+////////////////////////////
+// Installed packages JSON //
+////////////////////////////
+
+cJSON* load_installed_packages() {
+    char* content = read_file(INSTALLED_FILE);
+    if (!content) return NULL;
+    cJSON* root = cJSON_Parse(content);
+    free(content);
+    if (!root || !cJSON_IsArray(root)) {
+        if (root) cJSON_Delete(root);
+        return NULL;
+    }
+    return root;
+}
+
+int save_installed_packages(cJSON* root) {
+    if (!root) return -1;
+    char* out = cJSON_Print(root);
+    if (!out) return -2;
+    int ret = write_file(INSTALLED_FILE, out);
+    free(out);
+    return ret;
+}
+
+void add_or_update_installed_package(const Package* pkg) {
+    cJSON* root = load_installed_packages();
+    if (!root) root = cJSON_CreateArray();
+
+    int found = 0;
+    int size = cJSON_GetArraySize(root);
+    for (int i = 0; i < size; i++) {
+        cJSON* item = cJSON_GetArrayItem(root, i);
+        cJSON* id = cJSON_GetObjectItem(item, "id");
+        if (id && cJSON_IsString(id) && strcmp(id->valuestring, pkg->id) == 0) {
+            cJSON_ReplaceItemInObject(item, "name", cJSON_CreateString(pkg->name));
+            cJSON_ReplaceItemInObject(item, "version", cJSON_CreateString(pkg->version));
+            found = 1;
+            break;
         }
-        fclose(f);
     }
 
-    f = fopen(INSTALLED_FILE, "a");
-    if (f) {
-        fprintf(f, "{ \"name\": \"%s\", \"id\": \"%s\", \"version\": \"%s\" },\n", name, id, version);
-        fclose(f);
+    if (!found) {
+        cJSON* new_pkg = cJSON_CreateObject();
+        cJSON_AddStringToObject(new_pkg, "name", pkg->name);
+        cJSON_AddStringToObject(new_pkg, "id", pkg->id);
+        cJSON_AddStringToObject(new_pkg, "version", pkg->version);
+        cJSON_AddItemToArray(root, new_pkg);
     }
+
+    save_installed_packages(root);
+    cJSON_Delete(root);
 }
 
-
+///////////////////////
+// Download function //
+///////////////////////
 
 int download_file(const char* url, const char* out_path) {
     char cmd[2048];
@@ -80,43 +209,33 @@ int download_file(const char* url, const char* out_path) {
     return system(cmd);
 }
 
+/////////////////////////
+// Install package //
+/////////////////////////
+
 void install_package(const char* sk_name) {
     char filepath[512];
     sprintf(filepath, "%s/%s.json", REPO_FOLDER, sk_name);
 
-    FILE* fp = fopen(filepath, "r");
-    if (!fp) {
-        printf("Package '%s' not found.\n", sk_name);
+    Package pkg = {0};
+    if (parse_package_json(filepath, &pkg) != 0) {
+        printf("Package '%s' not found or invalid.\n", sk_name);
         return;
     }
 
-    char url[1024] = {0}, silent[128] = {0}, id[64] = {0}, type[8] = {0};
-    char name[128] = {0}, version[64] = {0}, installer[64] = {0};
-    char line[2048];
-    while (fgets(line, sizeof(line), fp)) {
-        if (strstr(line, "\"url\"")) sscanf(line, " \"url\" : \"%[^\"]\"", url);
-        else if (strstr(line, "\"silent\"")) sscanf(line, " \"silent\" : \"%[^\"]\"", silent);
-        else if (strstr(line, "\"id\"")) sscanf(line, " \"id\" : \"%[^\"]\"", id);
-        else if (strstr(line, "\"type\"")) sscanf(line, " \"type\" : \"%[^\"]\"", type);
-        else if (strstr(line, "\"name\"")) sscanf(line, " \"name\" : \"%[^\"]\"", name);
-        else if (strstr(line, "\"version\"")) sscanf(line, " \"version\" : \"%[^\"]\"", version);
-        else if (strstr(line, "\"installer\"")) sscanf(line, " \"installer\" : \"%[^\"]\"", installer);
-    }
-    fclose(fp);
-
-    if (strlen(silent) == 0 && strlen(installer) > 0) {
-        if (strcmp(installer, "nsis") == 0) strcpy(silent, "/S");
-        else if (strcmp(installer, "inno") == 0) strcpy(silent, "/VERYSILENT /SUPPRESSMSGBOXES");
-        else if (strcmp(installer, "msi") == 0) strcpy(silent, "/quiet /norestart");
-        else if (strcmp(installer, "installshield") == 0) strcpy(silent, "/s /v\"/qn\"");
-        else if (strcmp(installer, "squirrel") == 0) strcpy(silent, "--silent");
+    if (strlen(pkg.silent) == 0 && strlen(pkg.installer) > 0) {
+        if (strcmp(pkg.installer, "nsis") == 0) strcpy(pkg.silent, "/S");
+        else if (strcmp(pkg.installer, "inno") == 0) strcpy(pkg.silent, "/VERYSILENT /SUPPRESSMSGBOXES");
+        else if (strcmp(pkg.installer, "msi") == 0) strcpy(pkg.silent, "/quiet /norestart");
+        else if (strcmp(pkg.installer, "installshield") == 0) strcpy(pkg.silent, "/s /v\"/qn\"");
+        else if (strcmp(pkg.installer, "squirrel") == 0) strcpy(pkg.silent, "--silent");
     }
 
     char out_path[MAX_PATH];
-    sprintf(out_path, "%s\\%s.%s", getenv("TEMP"), id, type);
+    sprintf(out_path, "%s\\%s.%s", getenv("TEMP"), pkg.id, pkg.type);
 
-    printf("Downloading %s...\n", id);
-    if (download_file(url, out_path) != 0) {
+    printf("Downloading %s...\n", pkg.id);
+    if (download_file(pkg.url, out_path) != 0) {
         printf("Download failed.\n");
         return;
     }
@@ -125,11 +244,11 @@ void install_package(const char* sk_name) {
     sei.cbSize = sizeof(sei);
     sei.fMask = SEE_MASK_NOCLOSEPROCESS;
     sei.lpFile = out_path;
-    sei.lpParameters = silent;
-    sei.nShow = silent[0] ? SW_HIDE : SW_SHOWNORMAL;
+    sei.lpParameters = pkg.silent[0] ? pkg.silent : NULL;
+    sei.nShow = pkg.silent[0] ? SW_HIDE : SW_SHOWNORMAL;
     sei.lpVerb = "open";
 
-    printf("Installing %s...\n", id);
+    printf("Installing %s...\n", pkg.id);
     if (!ShellExecuteExA(&sei)) {
         printf("Install failed.\n");
         return;
@@ -137,49 +256,70 @@ void install_package(const char* sk_name) {
 
     WaitForSingleObject(sei.hProcess, INFINITE);
     CloseHandle(sei.hProcess);
-    printf("Installed %s successfully.\n", id);
+    printf("Installed %s successfully.\n", pkg.id);
 
-    log_installed(name, id, version);
+    add_or_update_installed_package(&pkg);
 }
 
+//////////////////////////////
+// List installed packages //
+//////////////////////////////
+
 void list_installed_packages() {
-    FILE* f = fopen(INSTALLED_FILE, "r");
-    if (!f) {
+    cJSON* root = load_installed_packages();
+    if (!root) {
         printf("No packages installed.\n");
         return;
     }
-    char line[512];
+
     printf("Installed packages:\n");
-    while (fgets(line, sizeof(line), f)) {
-        char name[128] = {0}, id[64] = {0};
-        sscanf(line, " { \"name\": \"%[^\"]\", \"id\": \"%[^\"]\"", name, id);
-        printf("  %s (%s)\n", name, id);
+    int size = cJSON_GetArraySize(root);
+    for (int i = 0; i < size; i++) {
+        cJSON* item = cJSON_GetArrayItem(root, i);
+        cJSON* name = cJSON_GetObjectItem(item, "name");
+        cJSON* id = cJSON_GetObjectItem(item, "id");
+        if (cJSON_IsString(name) && cJSON_IsString(id)) {
+            printf("  %s (%s)\n", name->valuestring, id->valuestring);
+        }
     }
-    fclose(f);
+    cJSON_Delete(root);
 }
 
+/////////////////////////////
+// Show installed package info //
+/////////////////////////////
+
 void show_installed_info(const char* pkg_id) {
-    FILE* f = fopen(INSTALLED_FILE, "r");
-    if (!f) {
+    cJSON* root = load_installed_packages();
+    if (!root) {
         printf("No installed packages recorded.\n");
         return;
     }
-    char line[1024];
+
+    int size = cJSON_GetArraySize(root);
     int found = 0;
-    while (fgets(line, sizeof(line), f)) {
-        char name[128] = {0}, id[64] = {0}, version[64] = {0};
-        sscanf(line, " { \"name\": \"%[^\"]\", \"id\": \"%[^\"]\", \"version\": \"%[^\"]\" }", name, id, version);
-        if (strcmp(id, pkg_id) == 0) {
-            printf("Name            : %s\n", name);
-            printf("Version         : %s\n", version);
-            printf("ID              : %s\n", id);
+    for (int i = 0; i < size; i++) {
+        cJSON* item = cJSON_GetArrayItem(root, i);
+        cJSON* id = cJSON_GetObjectItem(item, "id");
+        if (!cJSON_IsString(id)) continue;
+
+        if (strcmp(id->valuestring, pkg_id) == 0) {
+            cJSON* name = cJSON_GetObjectItem(item, "name");
+            cJSON* version = cJSON_GetObjectItem(item, "version");
+            printf("Name            : %s\n", cJSON_IsString(name) ? name->valuestring : "(unknown)");
+            printf("Version         : %s\n", cJSON_IsString(version) ? version->valuestring : "(unknown)");
+            printf("ID              : %s\n", id->valuestring);
             found = 1;
             break;
         }
     }
-    fclose(f);
+    cJSON_Delete(root);
     if (!found) printf("error: package '%s' not found in installed list\n", pkg_id);
 }
+
+/////////////////////////////
+// Search packages in repo //
+/////////////////////////////
 
 void search_repo_package(const char* query) {
     struct _finddata_t file;
@@ -195,83 +335,84 @@ void search_repo_package(const char* query) {
     do {
         char fullpath[512];
         sprintf(fullpath, "%s/%s", REPO_FOLDER, file.name);
-        FILE* fp = fopen(fullpath, "r");
-        if (!fp) continue;
-        char name[128] = {0}, id[64] = {0}, version[64] = {0}, line[1024];
-        while (fgets(line, sizeof(line), fp)) {
-            if (strstr(line, "\"name\"")) sscanf(line, " \"name\" : \"%[^\"]\"", name);
-            else if (strstr(line, "\"id\"")) sscanf(line, " \"id\" : \"%[^\"]\"", id);
-            else if (strstr(line, "\"version\"")) sscanf(line, " \"version\" : \"%[^\"]\"", version);
-        }
-        fclose(fp);
-        if (strstr(id, query) || strstr(name, query)) {
+
+        Package pkg = {0};
+        if (parse_package_json(fullpath, &pkg) != 0) continue;
+
+        if (strstr(pkg.id, query) || strstr(pkg.name, query)) {
             found = 1;
-            printf("%s - %s (%s)\n", id, name, version);
+            printf("%s - %s (%s)\n", pkg.id, pkg.name, pkg.version);
         }
     } while (_findnext(hFile, &file) == 0);
     _findclose(hFile);
     if (!found) printf("No matching packages found in repo for '%s'\n", query);
 }
 
+/////////////////////////////
+// Install from installed package.json //
+/////////////////////////////
+
 void install_from_package_json() {
-    FILE* f = fopen(INSTALLED_FILE, "r");
-    if (!f) {
+    cJSON* root = load_installed_packages();
+    if (!root) {
         printf("No package.json found.\n");
         return;
     }
 
-    char line[512];
-    while (fgets(line, sizeof(line), f)) {
-        char id[64] = {0};
-        if (strstr(line, "\"id\"")) {
-            sscanf(line, "%*[^:]: \"%[^\"]\"", id);
+    int size = cJSON_GetArraySize(root);
+    for (int i = 0; i < size; i++) {
+        cJSON* item = cJSON_GetArrayItem(root, i);
+        cJSON* id = cJSON_GetObjectItem(item, "id");
+        if (!cJSON_IsString(id)) continue;
 
-            char sk_path[512];
-            sprintf(sk_path, "%s/%s.json", REPO_FOLDER, id);
+        char sk_path[512];
+        sprintf(sk_path, "%s/%s.json", REPO_FOLDER, id->valuestring);
 
-            if (_access(sk_path, 0) == 0) {
-                printf("Installing from repo: %s\n", id);
-                install_package(id);
-            } else {
-                printf("Package not found in repo: %s\n", id);
-            }
+        if (_access(sk_path, 0) == 0) {
+            printf("Installing from repo: %s\n", id->valuestring);
+            install_package(id->valuestring);
+        } else {
+            printf("Package not found in repo: %s\n", id->valuestring);
         }
     }
-    fclose(f);
+    cJSON_Delete(root);
 }
 
+///////////////////////
+// Check updates //
+///////////////////////
+
 void check_updates() {
-    FILE* installed = fopen(INSTALLED_FILE, "r");
+    cJSON* installed = load_installed_packages();
     if (!installed) {
         printf("No installed packages recorded.\n");
         return;
     }
 
-    char line[512];
-    while (fgets(line, sizeof(line), installed)) {
-        char name[128] = {0}, id[64] = {0}, version_installed[64] = {0};
-        sscanf(line, " { \"name\": \"%[^\"]\", \"id\": \"%[^\"]\", \"version\": \"%[^\"]\" }", name, id, version_installed);
+    int size = cJSON_GetArraySize(installed);
+    for (int i = 0; i < size; i++) {
+        cJSON* item = cJSON_GetArrayItem(installed, i);
+        cJSON* id = cJSON_GetObjectItem(item, "id");
+        cJSON* name = cJSON_GetObjectItem(item, "name");
+        cJSON* version_installed = cJSON_GetObjectItem(item, "version");
+        if (!cJSON_IsString(id) || !cJSON_IsString(name) || !cJSON_IsString(version_installed)) continue;
 
         char filepath[512];
-        sprintf(filepath, "%s/%s.json", REPO_FOLDER, id);
-        FILE* sk = fopen(filepath, "r");
-        if (!sk) continue;
+        sprintf(filepath, "%s/%s.json", REPO_FOLDER, id->valuestring);
 
-        char version_repo[64] = {0}, line2[512];
-        while (fgets(line2, sizeof(line2), sk)) {
-            if (strstr(line2, "\"version\"")) {
-                sscanf(line2, " \"version\" : \"%[^\"]\"", version_repo);
-                break;
-            }
-        }
-        fclose(sk);
+        Package pkg = {0};
+        if (parse_package_json(filepath, &pkg) != 0) continue;
 
-        if (strcmp(version_installed, version_repo) != 0) {
-            printf("Update available: %s (%s → %s)\n", name, version_installed, version_repo);
+        if (strcmp(version_installed->valuestring, pkg.version) != 0) {
+            printf("Update available: %s (%s → %s)\n", name->valuestring, version_installed->valuestring, pkg.version);
         }
     }
-    fclose(installed);
+    cJSON_Delete(installed);
 }
+
+/////////////////////
+// List repo packages //
+/////////////////////
 
 void list_packages() {
     struct _finddata_t file;
@@ -290,25 +431,20 @@ void list_packages() {
         char fullpath[512];
         sprintf(fullpath, "%s/%s", REPO_FOLDER, file.name);
 
-        FILE* fp = fopen(fullpath, "r");
-        if (!fp) continue;
-
-        char name[256] = {0};
-        char line[1024];
-        while (fgets(line, sizeof(line), fp)) {
-            if (strstr(line, "\"name\"")) {
-                sscanf(line, " \"name\" : \"%[^\"]\"", name);
-                break;
-            }
+        Package pkg = {0};
+        if (parse_package_json(fullpath, &pkg) == 0) {
+            printf(" - %s (%s)\n", pkg.name[0] ? pkg.name : file.name, pkg.id);
+        } else {
+            printf(" - %s\n", file.name);
         }
-        fclose(fp);
-
-        char* no_ext = strtok(file.name, ".");
-        printf(" - %s (%s)\n", name[0] ? name : no_ext, no_ext);
     } while (_findnext(hFile, &file) == 0);
 
     _findclose(hFile);
 }
+
+///////////////////////
+// Main entry point //
+///////////////////////
 
 int main(int argc, char* argv[]) {
     char repo_url[1024] = {0};
@@ -330,6 +466,7 @@ int main(int argc, char* argv[]) {
         printf("  sk -S <sk>             [Install package]\n");
         printf("  sk -Sy                 [Refresh package list]\n");
         printf("  sk -Si                 [Install from Package.json]\n");
+        printf("  sk -Su                 [Check for updates]\n");
         printf("  sk -Sr <url>           [Set repo URL]\n");
         return 0;
     }
@@ -352,16 +489,19 @@ int main(int argc, char* argv[]) {
 
     if (strcmp(argv[1], "-Si") == 0) {
         install_from_package_json();
+        return 0;
     }
 
     if (strcmp(argv[1], "-Su") == 0) {
         check_updates();
+        return 0;
     }
 
     git_sync(repo_url);
 
     if (strcmp(argv[1], "-Ql") == 0) {
         list_packages();
+        return 0;
     }
 
     if (strcmp(argv[1], "-Ss") == 0 && argc == 3) {
