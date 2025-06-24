@@ -13,6 +13,7 @@
 #define REPO_FOLDER "C:/farm/wheats/Swissknife/knives"
 #define CONFIG_FILE "C:/farm/wheats/Swissknife/.pkgconfig"
 #define INSTALLED_FILE "C:/farm/wheats/Swissknife/package.json"
+#define SETUP_FOLDER "temp/.setup"
 
 HANDLE installed_mutex;
 
@@ -103,7 +104,7 @@ int parse_package_json(const char* filepath, Package* pkg) {
     if ((item = cJSON_GetObjectItem(root, "type"))) strncpy(pkg->type, item->valuestring, sizeof(pkg->type)-1);
     if ((item = cJSON_GetObjectItem(root, "installer"))) strncpy(pkg->installer, item->valuestring, sizeof(pkg->installer)-1);
 
-    sprintf(pkg->out_path, "%s\\%s.%s", getenv("TEMP"), pkg->id, pkg->type);
+    sprintf(pkg->out_path, "%s\\%s\\%s.%s", getenv("TEMP"), ".setup", pkg->id, pkg->type);
     cJSON_Delete(root);
     return 0;
 }
@@ -372,6 +373,12 @@ void list_installed_packages() {
     cJSON_Delete(root);
 }
 
+void ensure_setup_folder() {
+    char path[MAX_PATH];
+    sprintf(path, "%s\\%s", getenv("TEMP"), ".setup");
+    CreateDirectoryA(path, NULL);
+}
+
 int main(int argc, char* argv[]) {
     installed_mutex = CreateMutex(NULL, FALSE, NULL);
     if (!installed_mutex) return 1;
@@ -409,18 +416,27 @@ int main(int argc, char* argv[]) {
     if (strcmp(argv[1], "-Su") == 0) {
         check_updates();
     }
+    if (strcmp(argv[1], "clean") == 0) {
+        char cmd[MAX_PATH + 64];
+        sprintf(cmd, "rmdir /s /q \"%s\\%s\"", getenv("TEMP"), ".setup");
+        system(cmd);
+        printf("Cleaned setup folder.\n");
+        return 0;
+    }
+
+    ensure_setup_folder();
     if (strcmp(argv[1], "-Si") == 0) {
         install_from_package_json();
         return 0;
     }
-    if (strcmp(argv[1], "-Ql") == 0) {
-        list_packages();
-        return 0;
-    }
+
     if (strcmp(argv[1], "-S") == 0 && argc >= 3) {
         git_sync(repo_url);
-
         download_and_install_packages(argc - 2, &argv[2]);
+        return 0;
+    }
+    if (strcmp(argv[1], "-Ql") == 0) {
+        list_packages();
         return 0;
     }
 
