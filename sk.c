@@ -424,13 +424,13 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    ensure_setup_folder();
     if (strcmp(argv[1], "-Si") == 0) {
         install_from_package_json();
         return 0;
     }
 
     if (strcmp(argv[1], "-S") == 0 && argc >= 3) {
+        ensure_setup_folder();
         git_sync(repo_url);
         download_and_install_packages(argc - 2, &argv[2]);
         return 0;

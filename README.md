@@ -24,4 +24,7 @@ It has a pacman type option to install with a alias of `sk`
   sk -Su                 [Check for updates]\n
   sk -Sr <url>           [Set repo URL]\n
 ```
-
+# Compile
+```
+gcc -o "D:\git\swissknife\sk.exe" "D:\git\swissknife\sk.c" cJSON.c -lurlmon -lshlwapi -static
+```
