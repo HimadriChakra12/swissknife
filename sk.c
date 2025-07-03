@@ -111,7 +111,7 @@ int parse_package_json(const char* filepath, Package* pkg) {
 int download_file(const char* url, const char* out_path) {
     char cmd[2048];
     sprintf(cmd,
-            "powershell -WindowStyle Hidden -Command \"Start-BitsTransfer -Source '%s' -Destination '%s'\"",
+            "powershell -Command \"Start-BitsTransfer -Source '%s' -Destination '%s'\"",
             url, out_path);
     return system(cmd);
 }
