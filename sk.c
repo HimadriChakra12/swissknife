@@ -386,7 +386,7 @@ int main(int argc, char* argv[]) {
     read_repo_url(repo_url, sizeof(repo_url));
     if (argc < 2) {
         printf("Usage:\n");
-        printf("  sk -Q                  [List installed packages]\n");
+        printf("  sk -Qi                  [List installed packages]\n");
         printf("  sk -Q --info <pkg>     [Show installed package info]\n");
         printf("  sk -Ql                 [List all packages in the repo]\n");
         printf("  sk -Ss <pkg>           [Search for package in repo]\n");
