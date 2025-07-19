@@ -9,7 +9,7 @@ if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
 $path = "C:/farm/wheats/Swissknife"
 
 $docs = @(
-    @{url = "https://github.com/HimadriChakra12/swissknife/releases/download/1.0.0/sk.exe" ; outfile = "$env:TEMP/sk.exe"; file = "C:/farm/wheats/swissknife/sk.exe"}
+    @{url = "https://github.com/HimadriChakra12/swissknife/releases/download/1.1.0/sk.exe" ; outfile = "$env:TEMP/sk.exe"; file = "C:/farm/wheats/swissknife/sk.exe"}
 )
 
 if (-not (test-path $path)){
@@ -25,7 +25,7 @@ foreach ($doc in $docs){
 if (get-command git){
     write-host "Already have git" -ForegroundColor green
 } else {
-    iwr -uri "https://github.com/git-for-windows/git/releases/download/v2.50.0.windows.1/Git-2.50.0-64-bit.exe" -OutFile "$env:TEMP/git.exe"
+    iwr -uri "https://github.com/git-for-windows/git/releases/download/v2.50.1.windows.1/Git-2.50.1-64-bit.exe" -OutFile "$env:TEMP/git.exe"
     start-process "$env:TEMP/git.exe" -ArgumentList "/VERYSILENT /quiet /S /SILENT" -Wait -NoNewWindow
 }
 
