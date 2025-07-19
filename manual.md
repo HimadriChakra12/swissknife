@@ -10,13 +10,15 @@ You Will Need `name`, `id`, `url`,`version`, `type`, `installer`, `silent`.
 For example,
 ```
 {
-  "name": "qimgv",
-  "id": "qimgv",
-  "url": "https://github.com/easymodo/qimgv/releases/download/v1.0.2/qimgv-x64_1.0.2.exe",
-  "version": "1.0.2",
+  "name": "7-Zip",
+  "id": "7zip",
+  "version": "23.01",
+  "url": "https://www.7-zip.org/a/7z2301-x64.exe",
+  "silent": "/S",
   "type": "exe",
-  "installer": "inno",
-  "silent": ""
+  "installer": "nsis",
+  "uninstaller": "C:\\Program Files\\7-Zip\\Uninstall.exe",
+  "untype": "nsis"
 }
 ```
 

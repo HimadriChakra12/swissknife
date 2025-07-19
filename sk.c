@@ -25,6 +25,8 @@ typedef struct Package {
     char type[16];
     char installer[64];
     char out_path[MAX_PATH];
+    char untype[32]; // uninstaller type
+    char uninstaller[MAX_PATH];
 } Package;
 
 char* read_file(const char* filepath) {
@@ -102,6 +104,10 @@ int parse_package_json(const char* filepath, Package* pkg) {
     if ((item = cJSON_GetObjectItem(root, "silent"))) strncpy(pkg->silent, item->valuestring, sizeof(pkg->silent)-1);
     if ((item = cJSON_GetObjectItem(root, "type"))) strncpy(pkg->type, item->valuestring, sizeof(pkg->type)-1);
     if ((item = cJSON_GetObjectItem(root, "installer"))) strncpy(pkg->installer, item->valuestring, sizeof(pkg->installer)-1);
+    if ((item = cJSON_GetObjectItem(root, "uninstaller"))) strncpy(pkg->uninstaller, item->valuestring, sizeof(pkg->uninstaller)-1);
+    if ((item = cJSON_GetObjectItem(root, "untype"))) strncpy(pkg->untype, item->valuestring, sizeof(pkg->untype)-1);
+
+
 
     sprintf(pkg->out_path, "%s\\%s.%s", getenv("TEMP"), pkg->id, pkg->type);
     cJSON_Delete(root);
@@ -228,6 +234,40 @@ void download_and_install_packages(int count, char* package_names[]) {
 
     free(packages);
 }
+
+void remove_installed_package(const char* id) {
+    WaitForSingleObject(installed_mutex, INFINITE);
+    char* content = read_file(INSTALLED_FILE);
+    if (!content) {
+        ReleaseMutex(installed_mutex);
+        return;
+    }
+
+    cJSON* root = cJSON_Parse(content);
+    free(content);
+    if (!root || !cJSON_IsArray(root)) {
+        ReleaseMutex(installed_mutex);
+        return;
+    }
+
+    int len = cJSON_GetArraySize(root);
+    for (int i = 0; i < len; ++i) {
+        cJSON* item = cJSON_GetArrayItem(root, i);
+        cJSON* id_field = cJSON_GetObjectItem(item, "id");
+        if (id_field && strcmp(id_field->valuestring, id) == 0) {
+            cJSON_DeleteItemFromArray(root, i);
+            break;
+        }
+    }
+
+    char* updated = cJSON_Print(root);
+    write_file(INSTALLED_FILE, updated);
+    free(updated);
+    cJSON_Delete(root);
+    ReleaseMutex(installed_mutex);
+}
+
+
 void check_updates() {
     FILE* installed = fopen(INSTALLED_FILE, "r");
     if (!installed) {
@@ -386,7 +426,7 @@ int main(int argc, char* argv[]) {
     read_repo_url(repo_url, sizeof(repo_url));
     if (argc < 2) {
         printf("Usage:\n");
-        printf("  sk -Qi                  [List installed packages]\n");
+        printf("  sk -Qi                 [List installed packages]\n");
         printf("  sk -Q --info <pkg>     [Show installed package info]\n");
         printf("  sk -Ql                 [List all packages in the repo]\n");
         printf("  sk -Ss <pkg>           [Search for package in repo]\n");
@@ -401,6 +441,57 @@ int main(int argc, char* argv[]) {
         git_sync(repo_url);
         return 0;
     }
+
+    if (strcmp(argv[1], "-R") == 0 && argc >= 3) {
+        char filepath[512];
+        sprintf(filepath, "%s/%s.json", REPO_FOLDER, argv[2]);
+        Package pkg;
+        if (parse_package_json(filepath, &pkg) != 0) {
+            printf("Failed to load package info for %s\n", argv[2]);
+            return 1;
+        }
+
+        if (strlen(pkg.uninstaller) == 0) {
+            printf("No uninstaller path defined for %s\n", pkg.name);
+            return 1;
+        }
+
+        char uninstall_flags[256] = "";
+
+        if (strcmp(pkg.untype, "nsis") == 0)
+            strcpy(uninstall_flags, "/S");
+        else if (strcmp(pkg.untype, "inno") == 0)
+            strcpy(uninstall_flags, "/VERYSILENT /SUPPRESSMSGBOXES");
+        else if (strcmp(pkg.untype, "msi") == 0)
+            strcpy(uninstall_flags, "/quiet /norestart");
+        else if (strcmp(pkg.untype, "installshield") == 0)
+            strcpy(uninstall_flags, "/s /x /v\"/qn\"");
+        else if (strcmp(pkg.untype, "squirrel") == 0)
+            strcpy(uninstall_flags, "--silent");
+        else if (strcmp(pkg.untype, "exe") == 0)
+            strcpy(uninstall_flags, "/S");  // fallback
+                                            // else leave empty if unknown
+
+        printf("Uninstalling %s...\n", pkg.name);
+        SHELLEXECUTEINFOA sei = { sizeof(sei) };
+        sei.fMask = SEE_MASK_NOCLOSEPROCESS;
+        sei.lpFile = pkg.uninstaller;
+        sei.lpParameters = strlen(uninstall_flags) ? uninstall_flags : NULL;
+        sei.lpVerb = "open";
+        sei.nShow = strlen(uninstall_flags) ? SW_HIDE : SW_SHOWNORMAL;
+
+        if (ShellExecuteExA(&sei)) {
+            WaitForSingleObject(sei.hProcess, INFINITE);
+            CloseHandle(sei.hProcess);
+            remove_installed_package(pkg.id);
+            printf("%s uninstalled and removed from records.\n", pkg.name);
+        } else {
+            printf("Failed to run uninstaller for %s\n", pkg.name);
+        }
+
+        return 0;
+    }
+
 
     if (strcmp(argv[1], "-Q") == 0) {
         list_installed_packages();
