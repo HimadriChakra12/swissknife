@@ -26,5 +26,5 @@ It has a pacman type option to install with a alias of `sk`
 ```
 # Compile
 ```
-gcc -o "D:\git\swissknife\sk.exe" "D:\git\swissknife\sk.c" cJSON.c -lurlmon -lshlwapi -static
+gcc -o sk.exe sk.c cJSON.c -lshlwapi -lurlmon -lcomctl32
 ```
