@@ -8,6 +8,7 @@
 #include <io.h>
 #include <stdint.h>
 #include "cJSON.h"
+#include <shlobj.h>  // for SHGetFolderPathA
 #pragma comment(lib, "urlmon.lib")
 
 #define REPO_FOLDER "C:/farm/wheats/Swissknife/knives"
@@ -166,8 +167,13 @@ void add_or_update_installed_package(Package* pkg) {
     ReleaseMutex(installed_mutex);
 }
 
+
 void wait_and_install_packages(int count, Package packages[]) {
+    char userProfile[MAX_PATH];
+    SHGetFolderPathA(NULL, CSIDL_PROFILE, NULL, 0, userProfile); // get %USERPROFILE%
+
     for (int i = 0; i < count; ++i) {
+        // Set default silent args for known installer types
         if (!packages[i].silent[0] && packages[i].installer[0]) {
             if (strcmp(packages[i].installer, "nsis") == 0) strcpy(packages[i].silent, "/S");
             else if (strcmp(packages[i].installer, "inno") == 0) strcpy(packages[i].silent, "/VERYSILENT /SUPPRESSMSGBOXES");
@@ -176,6 +182,51 @@ void wait_and_install_packages(int count, Package packages[]) {
             else if (strcmp(packages[i].installer, "squirrel") == 0) strcpy(packages[i].silent, "--silent");
         }
 
+        // Detect if the package is a zip archive
+        size_t len = strlen(packages[i].out_path);
+        int is_zip = len > 4 && _stricmp(packages[i].out_path + len - 4, ".zip") == 0;
+
+        if (is_zip) {
+            // Build extraction path: %USERPROFILE%\swiss\<app>
+            char extract_path[MAX_PATH];
+            sprintf(extract_path, "%s\\swiss\\%s", userProfile, packages[i].name);
+
+            // Ensure directory exists
+            CreateDirectoryA(extract_path, NULL);
+
+            // Build cmd command to extract zip
+            char cmd[MAX_PATH * 2];
+            sprintf(cmd,
+                    "powershell -ExecutionPolicy Bypass -Command \"Expand-Archive -Path '%s' -DestinationPath '%s' -Force\"",
+                    packages[i].out_path,
+                    extract_path);
+
+            printf("Extracting %s...\n", packages[i].name);
+            system(cmd);
+
+            // Add extracted folder to user PATH
+            HKEY hKey;
+            if (RegOpenKeyExA(HKEY_CURRENT_USER, "Environment", 0, KEY_READ | KEY_WRITE, &hKey) == ERROR_SUCCESS) {
+                char oldPath[32767];
+                DWORD size = sizeof(oldPath);
+                if (RegQueryValueExA(hKey, "PATH", NULL, NULL, (LPBYTE)oldPath, &size) != ERROR_SUCCESS) oldPath[0] = 0;
+
+                if (!strstr(oldPath, extract_path)) {
+                    char newPath[32767];
+                    sprintf(newPath, "%s;%s", oldPath, extract_path);
+                    RegSetValueExA(hKey, "PATH", 0, REG_EXPAND_SZ, (const BYTE*)newPath, (DWORD)strlen(newPath) + 1);
+                    SendMessageTimeoutA(HWND_BROADCAST, WM_SETTINGCHANGE, 0, (LPARAM)"Environment", SMTO_ABORTIFHUNG, 5000, NULL);
+                }
+                RegCloseKey(hKey);
+            }
+
+            add_or_update_installed_package(&packages[i]);
+            printf("%s extracted and PATH updated.\n", packages[i].name);
+
+            continue; // skip normal installer execution
+        }
+
+        // Normal installer execution
         printf("Installing %s...\n", packages[i].name);
         SHELLEXECUTEINFOA sei = { sizeof(sei) };
         sei.fMask = SEE_MASK_NOCLOSEPROCESS;
