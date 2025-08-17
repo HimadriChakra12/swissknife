@@ -8,7 +8,11 @@
 #include <io.h>
 #include <stdint.h>
 #include "cJSON.h"
-#include <shlobj.h>  // for SHGetFolderPathA
+#include <shlobj.h>
+#include <objbase.h>
+#include <strsafe.h>
+#pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "urlmon.lib")
 
 #define REPO_FOLDER "C:/farm/wheats/Swissknife/knives"
@@ -115,6 +119,7 @@ int parse_package_json(const char* filepath, Package* pkg) {
     return 0;
 }
 
+
 int download_file(const char* url, const char* out_path) {
     char cmd[2048];
     sprintf(cmd,
@@ -167,6 +172,37 @@ void add_or_update_installed_package(Package* pkg) {
     ReleaseMutex(installed_mutex);
 }
 
+
+void create_start_menu_shortcut(const char *appName, const char *targetPath, const char *workingDir, const char *iconPath) {
+    char shortcutPath[MAX_PATH];
+    char startMenuPath[MAX_PATH];
+
+    // Get Start Menu\Programs folder for current user
+    if (SUCCEEDED(SHGetFolderPathA(NULL, CSIDL_PROGRAMS, NULL, 0, startMenuPath))) {
+        sprintf(shortcutPath, "%s\\%s.lnk", startMenuPath, appName);
+
+        IShellLinkA* psl;
+        HRESULT hr = CoCreateInstance(&CLSID_ShellLink, NULL, CLSCTX_INPROC_SERVER,
+                                      &IID_IShellLinkA, (LPVOID*)&psl);
+
+        if (SUCCEEDED(hr)) {
+            psl->lpVtbl->SetPath(psl, targetPath);       // EXE path
+            if (workingDir) psl->lpVtbl->SetWorkingDirectory(psl, workingDir);
+            if (iconPath)   psl->lpVtbl->SetIconLocation(psl, iconPath, 0);
+
+            IPersistFile* ppf;
+            hr = psl->lpVtbl->QueryInterface(psl, &IID_IPersistFile, (LPVOID*)&ppf);
+            if (SUCCEEDED(hr)) {
+                WCHAR wsz[MAX_PATH];
+                MultiByteToWideChar(CP_ACP, 0, shortcutPath, -1, wsz, MAX_PATH);
+                ppf->lpVtbl->Save(ppf, wsz, TRUE);
+                ppf->lpVtbl->Release(ppf);
+                printf("Shortcut created: %s\n", shortcutPath);
+            }
+            psl->lpVtbl->Release(psl);
+        }
+    }
+}
 
 void wait_and_install_packages(int count, Package packages[]) {
     char userProfile[MAX_PATH];
@@ -222,6 +258,16 @@ void wait_and_install_packages(int count, Package packages[]) {
 
             add_or_update_installed_package(&packages[i]);
             printf("%s extracted and PATH updated.\n", packages[i].name);
+
+            char exePath[MAX_PATH];
+            sprintf(exePath, "%s\\%s.exe", extract_path, packages[i].name);
+
+            create_start_menu_shortcut(
+                packages[i].name,
+                exePath,
+                extract_path,
+                exePath
+            );
 
             continue; // skip normal installer execution
         }
@@ -466,6 +512,9 @@ void list_installed_packages() {
 int main(int argc, char* argv[]) {
     installed_mutex = CreateMutex(NULL, FALSE, NULL);
     if (!installed_mutex) return 1;
+    
+    CoInitialize(NULL);
+
     char repo_url[1024] = {0};
 
     if (argc == 3 && strcmp(argv[1], "-Sr") == 0) {
@@ -565,6 +614,8 @@ int main(int argc, char* argv[]) {
         download_and_install_packages(argc - 2, &argv[2]);
         return 0;
     }
+
+    CoUninitialize();
 
     printf("Unknown command. Run without arguments for help.\n");
     return 0;
