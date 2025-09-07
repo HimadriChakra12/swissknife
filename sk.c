@@ -265,10 +265,10 @@ int parse_package_json(const char* filepath, Package* pkg) {
 
 int download_file(const char* url, const char* out_path) {
     char cmd[4096];
-    snprintf(cmd, sizeof(cmd),
-             "powershell -Command \"Start-BitsTransfer -Source '%s' -Destination '%s'\"",
-             url, out_path);
-    return system(cmd);
+        snprintf(cmd, sizeof(cmd),
+                 "aria2c -x 16 -s 16 -k 1M \"%s\" -o \"%s\"",
+                 url, out_path);
+        return system(cmd);
 }
 
 DWORD WINAPI download_thread(LPVOID param) {
