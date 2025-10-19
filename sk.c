@@ -28,6 +28,7 @@ typedef struct Package {
     char silent[128];
     char type[16];
     char installer[64];
+    char binpath[256];
     char out_path[MAX_PATH];
     char untype[32]; // uninstaller type
     char uninstaller[MAX_PATH];
@@ -61,7 +62,7 @@ int write_file(const char* filepath, const char* data) {
 /* ---- knives.json helpers ----
    knives.json format:
    { "knives": [ { "name": "main", "url": "https://..." }, ... ] }
-*/
+   */
 void ensure_knives_folder_and_config() {
     // KNIVES_FOLDER_PATH and KNIVES_CONFIG_PATH are initialized in main()
     CreateDirectoryA(KNIVES_FOLDER_PATH, NULL);
@@ -253,6 +254,7 @@ int parse_package_json(const char* filepath, Package* pkg) {
     if ((item = cJSON_GetObjectItem(root, "installer"))) strncpy(pkg->installer, item->valuestring, sizeof(pkg->installer)-1);
     if ((item = cJSON_GetObjectItem(root, "uninstaller"))) strncpy(pkg->uninstaller, item->valuestring, sizeof(pkg->uninstaller)-1);
     if ((item = cJSON_GetObjectItem(root, "untype"))) strncpy(pkg->untype, item->valuestring, sizeof(pkg->untype)-1);
+    if ((item = cJSON_GetObjectItem(root, "binpath"))) strncpy(pkg->binpath, item->valuestring, sizeof(pkg->binpath)-1);
 
     // build out_path
     const char* tmp = getenv("TEMP");
@@ -268,13 +270,13 @@ int download_file(const char* url, const char* out_path) {
     // Try aria2c first
     if (system("where aria2c >nul 2>&1") == 0) {
         snprintf(cmd, sizeof(cmd),
-                 "aria2c -x 16 -s 16 -k 1M \"%s\" -o \"%s\"",
-                 url, out_path);
+                "aria2c -x 16 -s 16 -k 1M \"%s\" -o \"%s\"",
+                url, out_path);
     } else {
         // Fallback to PowerShell
         snprintf(cmd, sizeof(cmd),
-                 "powershell -Command \"Start-BitsTransfer -Source '%s' -Destination '%s'\"",
-                 url, out_path);
+                "powershell -Command \"Start-BitsTransfer -Source '%s' -Destination '%s'\"",
+                url, out_path);
     }
 }
 
@@ -365,7 +367,7 @@ void create_start_menu_shortcut(const char *appName, const char *targetPath, con
 
         IShellLinkA* psl;
         HRESULT hr = CoCreateInstance(&CLSID_ShellLink, NULL, CLSCTX_INPROC_SERVER,
-                                      &IID_IShellLinkA, (LPVOID*)&psl);
+                &IID_IShellLinkA, (LPVOID*)&psl);
 
         if (SUCCEEDED(hr)) {
             psl->lpVtbl->SetPath(psl, targetPath);
@@ -386,12 +388,21 @@ void create_start_menu_shortcut(const char *appName, const char *targetPath, con
     }
 }
 
+void add_env_var(const char* folder) {
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd),
+            "powershell -NoProfile -Command \"$env:Path='%s;' + $env:Path\"",
+            folder);
+    system(cmd);
+}
 /* ---- install/unpack logic (mostly unchanged) ---- */
 void wait_and_install_packages(int count, Package packages[]) {
+
     char userProfile[MAX_PATH];
     SHGetFolderPathA(NULL, CSIDL_PROFILE, NULL, 0, userProfile);
 
     for (int i = 0; i < count; ++i) {
+        // Fill default silent arguments if missing
         if (!packages[i].silent[0] && packages[i].installer[0]) {
             if (strcmp(packages[i].installer, "nsis") == 0) strcpy(packages[i].silent, "/S");
             else if (strcmp(packages[i].installer, "inno") == 0) strcpy(packages[i].silent, "/VERYSILENT /SUPPRESSMSGBOXES");
@@ -402,21 +413,26 @@ void wait_and_install_packages(int count, Package packages[]) {
 
         size_t len = strlen(packages[i].out_path);
         int is_zip = len > 4 && _stricmp(packages[i].out_path + len - 4, ".zip") == 0;
+        int is_appx = len > 5 && (_stricmp(packages[i].out_path + len - 5, ".appx") == 0 ||
+                _stricmp(packages[i].out_path + len - 5, ".msix") == 0);
+        int is_nupkg = len > 6 && _stricmp(packages[i].out_path + len - 6, ".nupkg") == 0;
+        int is_msixbundle = len > 10 && _stricmp(packages[i].out_path + len - 10, ".msixbundle") == 0;
 
         if (is_zip) {
+            // ZIP extraction logic
             char extract_path[MAX_PATH];
             snprintf(extract_path, MAX_PATH, "%s\\swiss\\%s", userProfile, packages[i].name);
-
             CreateDirectoryA(extract_path, NULL);
 
             char cmd[MAX_PATH * 2];
             snprintf(cmd, sizeof(cmd),
-                     "powershell -ExecutionPolicy Bypass -Command \"Expand-Archive -Path '%s' -DestinationPath '%s' -Force\"",
-                     packages[i].out_path, extract_path);
+                    "powershell -ExecutionPolicy Bypass -Command \"Expand-Archive -Path '%s' -DestinationPath '%s' -Force\"",
+                    packages[i].out_path, extract_path);
 
             printf("Extracting %s...\n", packages[i].name);
             system(cmd);
 
+            // Update PATH and add shortcut
             HKEY hKey;
             if (RegOpenKeyExA(HKEY_CURRENT_USER, "Environment", 0, KEY_READ | KEY_WRITE, &hKey) == ERROR_SUCCESS) {
                 char oldPath[32767];
@@ -437,28 +453,130 @@ void wait_and_install_packages(int count, Package packages[]) {
 
             char exePath[MAX_PATH];
             snprintf(exePath, MAX_PATH, "%s\\%s.exe", extract_path, packages[i].name);
-
             create_start_menu_shortcut(packages[i].name, exePath, extract_path, exePath);
-            continue;
         }
 
-        printf("Installing %s...\n", packages[i].name);
-        SHELLEXECUTEINFOA sei = { sizeof(sei) };
-        sei.fMask = SEE_MASK_NOCLOSEPROCESS;
-        sei.lpFile = packages[i].out_path;
-        sei.lpParameters = packages[i].silent[0] ? packages[i].silent : NULL;
-        sei.nShow = packages[i].silent[0] ? SW_HIDE : SW_SHOWNORMAL;
-        sei.lpVerb = "open";
-        if (ShellExecuteExA(&sei)) {
-            WaitForSingleObject(sei.hProcess, INFINITE);
-            CloseHandle(sei.hProcess);
-            add_or_update_installed_package(&packages[i]);
-            printf("%s installed successfully.\n", packages[i].name);
-        } else {
-            printf("Installation failed for %s\n", packages[i].name);
+        else if (is_nupkg) {
+            // Install .nupkg via PowerShell
+            char cmd[MAX_PATH * 4];
+            snprintf(cmd, sizeof(cmd),
+                    "powershell -ExecutionPolicy Bypass -Command \"Install-Package -Source '%s' -Force -ForceBootstrap -SkipPublisherCheck\"",
+                    packages[i].out_path);
+
+            printf("Installing NuGet package %s via Install-Package...\n", packages[i].name);
+            int ret = system(cmd);
+            if (ret == 0) {
+                add_or_update_installed_package(&packages[i]);
+                printf("%s installed successfully as NuGet package.\n", packages[i].name);
+            } else {
+                printf("NuGet installation failed for %s\n", packages[i].name);
+            }
+        }
+
+        else if (is_appx || is_msixbundle) {
+            // AppX/MSIX installation
+            char cmd[MAX_PATH * 2];
+            snprintf(cmd, sizeof(cmd),
+                    "powershell -WindowStyle Hidden -Command \"Add-AppxPackage -Path '%s' -ForceApplicationShutdown -ErrorAction Stop\"",
+                    packages[i].out_path);
+
+            printf("Installing AppX package %s...\n", packages[i].name);
+            int ret = system(cmd);
+            if (ret == 0) {
+                add_or_update_installed_package(&packages[i]);
+                printf("%s installed successfully as AppX.\n", packages[i].name);
+
+                // Try to locate installed executable and add to PATH
+                char psCmd[MAX_PATH * 2];
+                snprintf(psCmd, sizeof(psCmd),
+                        "powershell -Command \"$p = Get-AppxPackage -Name '%s'; "
+                        "if ($p) { $exe = ($p.InstallLocation + '\\%s.exe'); if (Test-Path $exe) { Write-Output $exe } }\"",
+                        packages[i].name, packages[i].name);
+
+                FILE *fp = _popen(psCmd, "r");
+                if (fp) {
+                    char exePath[MAX_PATH];
+                    if (fgets(exePath, MAX_PATH, fp)) {
+                        exePath[strcspn(exePath, "\r\n")] = 0;
+
+                        create_start_menu_shortcut(packages[i].name, exePath, NULL, exePath);
+
+                        HKEY hKey;
+                        if (RegOpenKeyExA(HKEY_CURRENT_USER, "Environment", 0, KEY_READ | KEY_WRITE, &hKey) == ERROR_SUCCESS) {
+                            char oldPath[32767];
+                            DWORD sizeRp = sizeof(oldPath);
+                            if (RegQueryValueExA(hKey, "PATH", NULL, NULL, (LPBYTE)oldPath, &sizeRp) != ERROR_SUCCESS) oldPath[0] = 0;
+
+                            char exeDir[MAX_PATH];
+                            strcpy(exeDir, exePath);
+                            char *lastSlash = strrchr(exeDir, '\\');
+                            if (lastSlash) *lastSlash = 0;
+
+                            if (!strstr(oldPath, exeDir)) {
+                                char newPath[32767];
+                                snprintf(newPath, sizeof(newPath), "%s;%s", oldPath, exeDir);
+                                RegSetValueExA(hKey, "PATH", 0, REG_EXPAND_SZ, (const BYTE*)newPath, (DWORD)strlen(newPath) + 1);
+                                SendMessageTimeoutA(HWND_BROADCAST, WM_SETTINGCHANGE, 0, (LPARAM)"Environment", SMTO_ABORTIFHUNG, 5000, NULL);
+                            }
+                            RegCloseKey(hKey);
+                        }
+                    }
+                    _pclose(fp);
+                }
+            } else {
+                printf("AppX installation failed for %s\n", packages[i].name);
+            }
+        }
+
+        else {
+            // Default installer execution
+            printf("Installing %s...\n", packages[i].name);
+            SHELLEXECUTEINFOA sei = { sizeof(sei) };
+            sei.fMask = SEE_MASK_NOCLOSEPROCESS;
+            sei.lpFile = packages[i].out_path;
+            sei.lpParameters = packages[i].silent[0] ? packages[i].silent : NULL;
+            sei.nShow = packages[i].silent[0] ? SW_HIDE : SW_SHOWNORMAL;
+            sei.lpVerb = "open";
+            if (ShellExecuteExA(&sei)) {
+                WaitForSingleObject(sei.hProcess, INFINITE);
+                CloseHandle(sei.hProcess);
+                add_or_update_installed_package(&packages[i]);
+                printf("%s installed successfully.\n", packages[i].name);
+            } else {
+                printf("Installation failed for %s\n", packages[i].name);
+            }
+        }
+
+        // --- BINPATH SUPPORT ---
+        if (packages[i].binpath[0]) {
+            char fullPath[MAX_PATH];
+            snprintf(fullPath, sizeof(fullPath), "%s\\%s", userProfile, packages[i].binpath);
+
+            // Add to current session PATH immediately
+            add_env_var(fullPath);
+
+            // Optional: persist for future sessions
+            HKEY hKey;
+            if (RegOpenKeyExA(HKEY_CURRENT_USER, "Environment", 0, KEY_READ | KEY_WRITE, &hKey) == ERROR_SUCCESS) {
+                char oldPath[32767];
+                DWORD sizeRp = sizeof(oldPath);
+                if (RegQueryValueExA(hKey, "PATH", NULL, NULL, (LPBYTE)oldPath, &sizeRp) != ERROR_SUCCESS)
+                    oldPath[0] = 0;
+
+                if (!strstr(oldPath, fullPath)) {
+                    char newPath[32767];
+                    snprintf(newPath, sizeof(newPath), "%s;%s", oldPath, fullPath);
+                    RegSetValueExA(hKey, "PATH", 0, REG_EXPAND_SZ, (const BYTE*)newPath, (DWORD)strlen(newPath) + 1);
+                    SendMessageTimeoutA(HWND_BROADCAST, WM_SETTINGCHANGE, 0, (LPARAM)"Environment", SMTO_ABORTIFHUNG, 5000, NULL);
+                    printf("Added %s to PATH persistently.\n", fullPath);
+                }
+                RegCloseKey(hKey);
+            }
         }
     }
 }
+
+
 
 /* ---- helper: build package file path from "knife/id" or "id" (falls back to "main") ---- */
 void build_package_filepath(const char* spec, char* out_path, size_t out_len) {
@@ -547,8 +665,8 @@ void list_packages() {
     do {
         char fullpath[MAX_PATH];
         snprintf(fullpath, MAX_PATH, "%s\\%s", KNIVES_FOLDER_PATH, file.name); // file.name contains "knife\\file.json"
-        // But the _findfirst with pattern above returns filenames with subdir\file.json on Windows MSVCRT? To keep safe we can reconstruct:
-        // file.name might be "knife\\id.json" or just "id.json" depending on libc; so parse name:
+                                                                               // But the _findfirst with pattern above returns filenames with subdir\file.json on Windows MSVCRT? To keep safe we can reconstruct:
+                                                                               // file.name might be "knife\\id.json" or just "id.json" depending on libc; so parse name:
         char *p = strchr(file.name, '\\');
         if (!p) continue;
         char knife[MAX_KNIFE_NAME] = {0};
@@ -653,8 +771,8 @@ void check_updates() {
             cJSON* version_repo = cJSON_GetObjectItem(pkgroot, "version");
             if (version_repo && version_installed && strcmp(version_installed->valuestring, version_repo->valuestring) != 0) {
                 printf("Update available: %s (%s → %s)\n", name ? name->valuestring : id->valuestring,
-                       version_installed ? version_installed->valuestring : "unknown",
-                       version_repo->valuestring);
+                        version_installed ? version_installed->valuestring : "unknown",
+                        version_repo->valuestring);
             }
             cJSON_Delete(pkgroot);
         } while (_findnext(h, &f) == 0);
@@ -718,6 +836,8 @@ void install_from_package_json() {
     free(packages);
     cJSON_Delete(root);
 }
+
+
 
 /* ---- main() ---- */
 int main(int argc, char* argv[]) {
@@ -840,8 +960,8 @@ int main(int argc, char* argv[]) {
     }
 
     if (argc == 2 && strcmp(argv[1], "-Skl") == 0) {
-    list_knives();
-    return 0;
+        list_knives();
+        return 0;
     }
 
     if (strcmp(argv[1], "-S") == 0 && argc >= 3) {
