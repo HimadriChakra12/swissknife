@@ -267,17 +267,27 @@ int parse_package_json(const char* filepath, Package* pkg) {
 
 int download_file(const char* url, const char* out_path) {
     char cmd[4096];
-    // Try aria2c first
-    if (system("where aria2c >nul 2>&1") == 0) {
+
+    // First try BITS transfer
+    snprintf(cmd, sizeof(cmd),
+             "powershell -Command \"Start-BitsTransfer -Source '%s' -Destination '%s'\"",
+             url, out_path);
+    int r = system(cmd);
+    if (r != 0) {
+        printf("BITS download failed, trying Invoke-WebRequest...\n");
+
+        // fallback: Invoke-WebRequest
         snprintf(cmd, sizeof(cmd),
-                "aria2c -x 16 -s 16 -k 1M \"%s\" -o \"%s\"",
-                url, out_path);
-    } else {
-        // Fallback to PowerShell
-        snprintf(cmd, sizeof(cmd),
-                "powershell -Command \"Start-BitsTransfer -Source '%s' -Destination '%s'\"",
-                url, out_path);
+                 "powershell -Command \"Invoke-WebRequest -Uri '%s' -OutFile '%s'\"",
+                 url, out_path);
+        r = system(cmd);
+        if (r != 0) {
+            printf("Invoke-WebRequest download failed for %s\n", out_path);
+            return -1;
+        }
     }
+
+    return 0;
 }
 
 DWORD WINAPI download_thread(LPVOID param) {
